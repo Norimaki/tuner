@@ -2,6 +2,11 @@
 
 <schemalist>
     <schema path="/com/github/louis77/tuner/" id="com.github.louis77.tuner">
+        <key name="window-status" type="i">
+            <default>1</default>
+            <summary>Window status</summary>
+            <description>Saved status of main window</description>
+        </key>
         <key name="pos-x" type="i">
             <default>360</default>
             <summary>Horizontal position</summary>
