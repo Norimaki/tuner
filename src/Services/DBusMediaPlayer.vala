@@ -17,12 +17,18 @@
 * along with Tuner.  If not, see <http://www.gnu.org/licenses/>.
 *
 */
-
+//using GLib;
 namespace Tuner.DBus {
 
     const string ServerName = "org.mpris.MediaPlayer2.Tuner";
-    const string ServerPath = "/org/mpris/MediaPlayer2";
+    const string ServerPath = "/org/mpris/MediaPlayer2";    
+    const string INTERFACE_NAME = "org.mpris.MediaPlayer2.Player";
+    const string DbusPath = "/com/github/louis77/tuner";
+    const string NOTRACK = "/org/mpris/MediaPlayer2/TrackList/NoTrack";
+
     private bool is_initialized = false;
+
+    protected TrackListRecent tracklist;
 
     public void initialize () {
         if (is_initialized) {
@@ -48,6 +54,7 @@ namespace Tuner.DBus {
 
     void onBusAcquired (DBusConnection conn) {
         try {
+            tracklist = new TrackListRecent();
             conn.register_object<IMediaPlayer2> (ServerPath, new MediaPlayer ());
             conn.register_object<IMediaPlayer2Player> (ServerPath, new MediaPlayerPlayer (conn));
         } catch (IOError e) {
@@ -55,6 +62,70 @@ namespace Tuner.DBus {
         }
         info (@"DBus Server is now listening on $ServerName $ServerPath…\n");
     }
+
+    //public class MediaPlayer2TrackList : Object, DBus.IMediaPlayer2TrackList {
+    public class MediaPlayer2TrackList : Object {
+
+        private Variant _tracks;
+
+        //string[] b = {"n","v"};
+        //Variant var3 = new Variant.objv (b);
+        //Constructs an array of object paths Variant from the given array of strings.
+
+        //ObjectPath[]
+        public Variant tracks {        
+            get {
+                return this._tracks;
+            }
+        }  
+
+        public bool can_edit_tracks {        
+            get {
+                return false;
+            }
+        }  
+
+        public void add_track (string Uri, ObjectPath AfterTrack, bool SetAsCurrent) {
+        }
+    }
+
+    public class TrackListRecent : Object {
+
+        private string[] _tracks;
+        private const uint8 N_TRACKS = 5;
+        private uint8 _count = 0;
+
+        protected HashTable<string,string> uri_to_id =  new HashTable<string, string> (str_hash, str_equal);
+
+        public TrackListRecent(){
+            _tracks.resize (N_TRACKS);
+            _tracks[N_TRACKS-1]=NOTRACK;
+       }
+
+
+        public string add_track (string Uri) {
+            if (this.uri_to_id.contains (Uri)){
+                return this.uri_to_id.get (Uri);
+            }
+            else{
+                uint8 index = _count+1;
+                _count = (_count+1) % N_TRACKS;
+                string tail = _tracks[N_TRACKS-1];
+                _tracks.move (0, 1, N_TRACKS-1);
+                _tracks[0]=DbusPath+"/playlist/"+index.to_string ("%d");
+                this.uri_to_id.foreach_remove ((key, val) => {
+                    if (val == tail){
+                        return true; 
+                    }
+                    return false;
+                });
+                this.uri_to_id.insert (Uri, _tracks[0]);
+                return _tracks[0];
+            }
+        }
+    }
+
+
 
     public class MediaPlayer : Object, DBus.IMediaPlayer2 {
         public void raise() throws DBusError, IOError {
@@ -104,10 +175,9 @@ namespace Tuner.DBus {
             }
         }
 
-        // TODO
         public string[] supported_mime_types {
             owned get {
-                return {"audio/mp3"};
+                return {"audio/*"};
             }
         }
 
@@ -120,36 +190,324 @@ namespace Tuner.DBus {
         }
     }
 
+    public class MSGxLL : GLib.Object{
+
+        private string _future;
+        public string future {
+            owned get {
+                return _future;
+            }
+            set {
+                _future = value;
+            }
+        }
+
+
+
+        [CCode (notify = false)]
+        public string other;
+
+        public MSGxLL () {
+            
+        }
+
+
+        public int cancel (uint timeout_source) {
+            Source.remove (timeout_source);
+            return 0;
+        }
+
+
+
+        public int send (string k,string str, uint timeout_source) {
+
+            
+            if (timeout_source == 0){
+                timeout_source=Timeout.add (2048, () => {
+
+                    var Notification = new GLib.Notification (k);
+                    Notification.set_body (str);
+                    var Icon = new GLib.ThemedIcon ("dialog-information");
+                    Notification.set_icon (Icon);
+                    Application.instance.send_notification (null, Notification);        
+
+                    future = str;
+                    timeout_source=0;
+                    return false;
+                });
+                return (int) timeout_source;
+            }
+            else{
+                return -1;
+            }
+
+
+           
+        }
+
+      
+    }
+
+    
+
+    public class Sender : Object{
+        private static HashTable<string,MutableVar> changes;
+        private static DBusConnection conn;
+        private static uint send_source;
+
+        public static void init (DBusConnection c){
+            changes = new HashTable<string, MutableVar> (str_hash, str_equal);
+            conn = c;
+            send_source = 0;
+        }
+        public static void add (string key, MutableVar val){
+            changes.insert(key, val);
+            send();
+        }
+        public static void remove (string key){
+            if (changes.contains (key)){
+            changes.remove(key);
+            }
+            send();
+        }
+        public static MutableVar get_key (string key){
+            return changes.get(key);
+        }
+        private static bool send (){
+            if (send_source == 0){
+                send_source = Timeout.add (1024, () => {
+                    Idle.add (send_dbus);
+                    return false;
+                });
+            }
+            return true;
+        }
+        private static bool send_dbus (){
+            if (changes.length < 1){
+                send_source = 0;
+                return false;
+            }
+
+            var invalidated_builder = new VariantBuilder (new VariantType ("as"));
+            var builder = new VariantBuilder (VariantType.ARRAY);
+
+            foreach (string name in changes.get_keys ()) {
+                MutableVar n = changes.lookup (name);
+                Variant variant = n.get_value ();
+                n.confirm();
+                changes.remove (name);
+                builder.add ("{sv}", name, variant);
+            }
+
+            try {
+                conn.emit_signal (null,
+                                "/org/mpris/MediaPlayer2",
+                                "org.freedesktop.DBus.Properties",
+                                "PropertiesChanged",
+                                new Variant ("(sa{sv}as)",
+                                            INTERFACE_NAME,
+                                            builder,
+                                            invalidated_builder)
+                                );
+            } catch (Error e) {
+                debug (@"Could not send MPRIS property change: $(e.message)");
+            }  
+            send_source = 0;
+            return false;
+        }
+    }
+
+    public class MutableVar : Object {
+        private string key;
+        private Variant value;
+        private Variant confirmed;
+ 
+        public MutableVar (string key, Variant variant){
+            this.key = key;
+            this.value = variant;
+            this.confirmed = variant;
+        }
+        public Variant get_value(){
+            return this.value;
+        }
+        public void set_value (Variant value){
+            this.value = value;
+            if (!this.value.equal(this.confirmed)){
+                Sender.add (this.key, this);
+            }
+            else{
+                Sender.remove (this.key);
+            }
+        }
+        public void confirm(){
+            this.confirmed = this.value;
+        }
+    }
 
     public class MediaPlayerPlayer : Object, DBus.IMediaPlayer2Player {
-        [DBus (visible = false)]
-        private string _playback_status = "Stopped";
-        private uint update_metadata_source = 0;
-        private uint send_property_source = 0;
-        private HashTable<string,Variant> changed_properties = null;
+        //[DBus (visible = false)]
+        bool _c_playing;                // Control var
+        bool _c_uri_changed;             // Control var
+        bool _c_runned_autoplay;             // Control var
+        bool _c_station_loaded;
+
+        MutableVar z_playbackstatus;    // Used by DBus
+        MutableVar z_can_play;          // Used by DBus
+        MutableVar z_can_pause;         // Used by DBus
+        MutableVar z_metadata;          // Used by DBus
+        Variant _metadata_notrack;      // No-track Metadata. Used by z_metadata
+        Variant _metadata_track;        // Current track Metadata. Used by z_metadata
+        VariantDict _h_metadata_vd;     // Helper to build a{sv}. Reusable
+
+        MutableVar z_metadata_2;          // Used by DBus
+        Variant _metadata_2;
 
         [DBus (visible = false)]
         public unowned DBusConnection conn { get; construct set; }
 
-        private const string INTERFACE_NAME = "org.mpris.MediaPlayer2.Player";
-
         public MediaPlayerPlayer (DBusConnection conn) {
+
             Object (conn: conn);
+
+            Sender.init(conn);
+
+            _c_playing = false;
+            _c_uri_changed = false;
+            _c_runned_autoplay = false;
+            _c_station_loaded = false;
+            MutableVar z_test = new MutableVar(
+                "Test",
+                new Variant.int32(0)
+            );
+            z_playbackstatus = new MutableVar(
+                "PlaybackStatus", 
+                new Variant.string ("Stopped")
+            );
+            z_can_play = new MutableVar(
+                "CanPlay", 
+                new Variant.boolean (false)
+            );
+            z_can_pause = new MutableVar(
+                "CanPause",
+                new Variant.boolean (false)
+            );
+            _h_metadata_vd = new VariantDict();
+            _h_metadata_vd.insert_value (
+                "mpris:trackid", 
+                new Variant.string (NOTRACK)
+            );
+            _metadata_track = _h_metadata_vd.end();
+            var _h_metadata_vd_notrack = new VariantDict();
+            _h_metadata_vd_notrack.insert_value (
+                "mpris:trackid", 
+                new Variant.string (NOTRACK)
+            );
+            _metadata_notrack = _h_metadata_vd_notrack.end();
+            z_metadata = new MutableVar("Metadata", _metadata_notrack);
+
             Application.instance.player.state_changed.connect ((state) => {
+
                 switch (state) {
                 case Gst.PlayerState.PLAYING:
+                debug (@"#v7 on PLAYING");
+                    _c_playing = true;
+                    z_playbackstatus.set_value (new Variant.string ("Playing"));
+                    break;
                 case Gst.PlayerState.BUFFERING:
-                    playback_status = "Playing";
+                    _c_playing = true;
                     break;
                 case Gst.PlayerState.STOPPED:
-                    playback_status = "Stopped";
+                debug (@"#v7 on STOPPED");
+                    _c_playing = false;
+
+                    /* 
+                    if (send_source == 0){
+                        send_source = Timeout.add (1024, () => {
+                            
+                            return false;
+                        });
+                    }
+                    */
+                    z_metadata.set_value(_metadata_notrack);
+                    z_playbackstatus.set_value (new Variant.string ("Stopped"));
                     break;
                 case Gst.PlayerState.PAUSED:
-                    playback_status = "Paused";
+                debug (@"#v7 on PAUSED");
+                    _c_playing = false;
+                    z_playbackstatus.set_value (new Variant.string ("Paused"));
                     break;
                 }
+
+                //z_test.set_value (new Variant.int32(GLib.Random.int_range(0,1000000)));
+
             });
+            Application.instance.player.player.uri_loaded.connect ((uri) => {
+                debug (@"#v7 ######uri_loaded");
+            });
+             Application.instance.player.uri_changed.connect ((uri) => {
+                debug (@"#v7 uri_changed");
+            });
+            //Application.instance.player.title_changed.connect ((title) => {
+            //    debug (@"#v7 tilte_changed");
+            //});
+            Application.instance.player.media_info_updated.connect ((sd) => {
+                if (_c_playing && _c_station_loaded){
+                    debug (@"#v7 title_changed:_c_playing && _c_station_loaded");
+
+                    _h_metadata_vd = new VariantDict(_metadata_track);
+                    if (sd.title == null){
+                        sd.title = "";
+                    }
+                    Variant meta_title = new Variant.string (sd.title);
+                    _h_metadata_vd.insert_value ("xesam:title", meta_title);
+
+                    if (sd.genre != null){
+                        Variant meta_genre = new Variant.string (sd.genre);
+                        _h_metadata_vd.insert_value ("xesam:genre", meta_genre);
+                    }
+                    if (sd.min_max_bitrate != null){
+                        Variant meta_min_max_bitrate = new Variant.int32 (sd.min_max_bitrate);
+                        _h_metadata_vd.insert_value ("bitrate", meta_min_max_bitrate);
+                    }
+                    _metadata_track = _h_metadata_vd.end();
+                    z_metadata.set_value (_metadata_track);
+                }
+            });   
+          
+            Application.instance.player.station_changed.connect ((station) => {
+                debug (@"#v7 station_changed $(station.title)");
+
+                _c_station_loaded = true;
+                z_playbackstatus.set_value (new Variant.string ("Playing"));
+
+                string uri = station.url;
+
+                //var url = Application.instance.player.player.uri;
+                z_can_play.set_value (new Variant.boolean (true));
+                z_can_pause.set_value (new Variant.boolean (true));
+
+                var s_meta_trackid = tracklist.add_track (uri);
+                _h_metadata_vd = new VariantDict(_metadata_track);
+                _h_metadata_vd.insert_value ("mpris:trackid",new Variant.object_path(s_meta_trackid));
+                _h_metadata_vd.insert_value ("xesam:url", new Variant.string (uri));
+                _h_metadata_vd.insert_value ("xesam:artist",new Variant.string (station.title));
+                if (_h_metadata_vd.contains ("xesam:title")){
+                    _h_metadata_vd.remove ("xesam:title");
+                }
+                if (_h_metadata_vd.contains ("xesam:genre")){
+                    _h_metadata_vd.remove ("xesam:genre");
+                }
+                if (_h_metadata_vd.contains ("bitrate")){
+                    _h_metadata_vd.remove ("bitrate");
+                }
+                _metadata_track = _h_metadata_vd.end();
+                z_metadata.set_value (_metadata_track);
+            }); 
         }
+     
+
+
+       
 
         public void next() throws DBusError, IOError {
             // debug ("DBus Next() requested");
@@ -161,6 +519,7 @@ namespace Tuner.DBus {
 
         public void pause() throws DBusError, IOError {
             //  debug ("DBus Pause() requested");
+            Application.instance.player.player.pause();
         }
 
         public void play_pause() throws DBusError, IOError {
@@ -175,7 +534,7 @@ namespace Tuner.DBus {
 
         public void play() throws DBusError, IOError {
             //  debug ("DBus Play() requested");
-            Application.instance.player.play_pause ();
+            Application.instance.player.player.play ();
         }
 
         public void seek(int64 Offset) throws DBusError, IOError {
@@ -193,14 +552,10 @@ namespace Tuner.DBus {
         // Already defined in the interface
         // public signal void seeked(int64 Position);
 
-        public string playback_status {
+        public Variant playback_status {
             owned get {
-                //  debug ("DBus PlaybackStatus() requested");
-                return _playback_status;
-            }
-            set {
-                _playback_status = value;
-                trigger_metadata_update ();
+                assert(z_playbackstatus.get_value().is_of_type (VariantType.STRING));
+                return z_playbackstatus.get_value();
             }
         }
 
@@ -213,21 +568,10 @@ namespace Tuner.DBus {
         public double rate { get; set; }
         public bool shuffle { get; set; }
 
-        public HashTable<string, Variant>? metadata {
+        public Variant metadata { 
             owned get {
-                //  debug ("DBus metadata requested");
-                var table = new HashTable<string, Variant> (str_hash, str_equal);
-                table.insert ("xesam:title", "Tuner");
-
-                var station = Application.instance.player.station;
-                if (station != null) {
-                    var station_title = station.title;
-                    table.insert ("xesam:artist", get_simple_string_array (station_title));
-                } else {
-                    table.insert ("xesam:artist", get_simple_string_array (null));
-                }
-
-                return table;
+                assert(z_metadata.get_value().is_of_type (VariantType.VARDICT));
+                return z_metadata.get_value();
             }
         }
         public double volume { owned get; set; }
@@ -249,88 +593,36 @@ namespace Tuner.DBus {
 	        }
 	    }
 
-        public bool can_play {
-            get {
-                //  debug ("CanPlay() requested");
-                return Application.instance.player.can_play ();
+        public Variant can_play  {
+	        owned get {
+                assert(z_can_play.get_value().is_of_type (VariantType.BOOLEAN));
+                return z_can_play.get_value();
             }
         }
-	    public bool can_pause {  get; }
-	    public bool can_seek {  get; }
 
+	    public Variant can_pause {
+	        owned get {
+                assert(z_can_pause.get_value().is_of_type (VariantType.BOOLEAN));
+                return z_can_pause.get_value();
+            }
+        }
+
+	    public bool can_seek {
+	        get {
+                return false;
+            }
+        }
 	    public bool can_control {
 	        get {
-                //  debug ("CanControl() requested");
                 return true;
             }
         }
-
-        private void trigger_metadata_update () {
-            if (update_metadata_source != 0) {
-                Source.remove (update_metadata_source);
-            }
-
-            update_metadata_source = Timeout.add (300, () => {
-                Variant variant = playback_status;
-
-                queue_property_for_notification ("PlaybackStatus", variant);
-                queue_property_for_notification ("Metadata", metadata);
-                update_metadata_source = 0;
-                return false;
-            });
-        }
-
-        private void queue_property_for_notification (string property, Variant val) {
-            if (changed_properties == null) {
-                changed_properties = new HashTable<string, Variant> (str_hash, str_equal);
-            }
-
-            changed_properties.insert (property, val);
-
-            if (send_property_source == 0) {
-                send_property_source = Idle.add (send_property_change);
-            }
-        }
-
-        private bool send_property_change () {
-            if (changed_properties == null) {
-                return false;
-            }
-
-            var builder = new VariantBuilder (VariantType.ARRAY);
-            var invalidated_builder = new VariantBuilder (new VariantType ("as"));
-
-            foreach (string name in changed_properties.get_keys ()) {
-                Variant variant = changed_properties.lookup (name);
-                builder.add ("{sv}", name, variant);
-            }
-
-            changed_properties = null;
-
-            try {
-                conn.emit_signal (null,
-                                  "/org/mpris/MediaPlayer2",
-                                  "org.freedesktop.DBus.Properties",
-                                  "PropertiesChanged",
-                                  new Variant ("(sa{sv}as)",
-                                             INTERFACE_NAME,
-                                             builder,
-                                             invalidated_builder)
-                                 );
-            } catch (Error e) {
-                debug (@"Could not send MPRIS property change: $(e.message)");
-            }
-            send_property_source = 0;
-            return false;
-        }
-
-        private static string[] get_simple_string_array (string? text) {
-            if (text == null) {
-                return new string[0];
-            }
-            string[] array = new string[0];
-            array += text;
-            return array;
-        }
     }
+    
+  
+   
+
+
+
+
 }
