@@ -78,8 +78,8 @@ public class Tuner.Window : Gtk.ApplicationWindow {
 
         player.state_changed.connect (handleplayer_state_changed);
         player.station_changed.connect (headerbar.update_from_station);
-        player.title_changed.connect ((title) => {
-            headerbar.subtitle = title;
+        player.media_info_updated.connect ((title) => {
+            headerbar.subtitle = title.title;
         });
         player.volume_changed.connect ((volume) => {
             headerbar.volume_button.value = volume;
