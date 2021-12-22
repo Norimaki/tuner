@@ -130,32 +130,42 @@ public int RandomSortFunc (string a, string b) {
 }
 
 public class Client : Object {
-    private string current_server;
     private string USER_AGENT = @"$(Application.APP_ID)/$(Application.APP_VERSION)";
     private Soup.Session _session;
-    private ArrayList<string> randomized_servers;
+
+    private static string _last_server_base;
+    private static ArrayList<string> randomized_servers;
+    private static string[] servers;
+
+    private static void remove_server () {
+        if (randomized_servers.size > 0){
+            randomized_servers.remove (_last_server_base);
+        }
+    }
+
+    private static string get_server () {
+        if (servers == null){
+            string _servers = GLib.Environment.get_variable ("TUNER_API");
+            if (_servers != null){
+                servers = _servers.split(":");
+            } else {
+                servers = DEFAULT_BOOTSTRAP_SERVERS;
+            }
+        }
+        if (randomized_servers == null || randomized_servers.size == 0){
+            randomized_servers = new ArrayList<string>.wrap (servers, EqualCompareString);
+        }
+
+        randomized_servers.sort (RandomSortFunc);
+        _last_server_base = randomized_servers[0];
+        return @"https://$(_last_server_base)";
+    }
 
     public Client() throws DataError {
         Object();
         _session = new Soup.Session ();
         _session.user_agent = USER_AGENT;
         _session.timeout = 3;
-
-
-        string[] servers;
-        string _servers = GLib.Environment.get_variable ("TUNER_API");
-        if ( _servers != null ){
-            servers = _servers.split(":");
-        } else {
-            servers = DEFAULT_BOOTSTRAP_SERVERS;
-        }
-
-        randomized_servers = new ArrayList<string>.wrap (servers, EqualCompareString);
-        randomized_servers.sort (RandomSortFunc);
-
-        current_server = @"https://$(randomized_servers[0])";
-        debug (@"Chosen radio-browser.info server: $current_server");
-        // TODO: Implement server rotation on error
     }
 
     private Station jnode_to_station (Json.Node node) {
@@ -191,32 +201,52 @@ public class Client : Object {
     public void track (string stationuuid) {
         debug (@"sending listening event for station $stationuuid");
         var resource = @"json/url/$stationuuid";
-        var message = new Soup.Message ("GET", @"$current_server/$resource");
-        var response_code = _session.send_message (message);
-        debug (@"response: $(response_code)");
+        var message = new Soup.Message ("GET", @"$(get_server())/$resource");
+        _session.queue_message (message, (session, msg) => {
+            debug (@"response: $(msg.status_code)");
+        });    
     }
 
     public void vote (string stationuuid) {
         debug (@"sending vote event for station $stationuuid");
         var resource = @"json/vote/$stationuuid)";
-        var message = new Soup.Message ("GET", @"$current_server/$resource");
-        var response_code = _session.send_message (message);
-        debug (@"response: $(response_code)");
+        var message = new Soup.Message ("GET", @"$(get_server())/$resource");
+        _session.queue_message (message, (session, msg) => {
+            debug (@"response: $(msg.status_code)");
+        });    
     }
 
-    public ArrayList<Station> get_stations (string resource) throws DataError {
-        debug (@"RB $resource");
 
-        var message = new Soup.Message ("GET", @"$current_server/$resource");
-        Json.Node rootnode;
+    private Soup.Message? response (string resource, int retry = -1){
 
-        var response_code = _session.send_message (message);
-        debug (@"response from radio-browser.info: $response_code");
+        var server = get_server ();
+        if (retry < 0) retry = randomized_servers.size;
+        if (retry == 0) {
+            debug (@"RadioBrowser. End of http retries.");
+            return null;
+        }
+
+        var message = new Soup.Message ("GET", @"$(server)/$resource");
+        _session.send_message (message);
         var body = (string) message.response_body.data;
         if (body == null) {
+            debug (@"RadioBrowser. Http retry");
+            remove_server();
+            return response (resource,retry-1);
+        }
+        return message;
+    } 
+
+    public ArrayList<Station> get_stations (string resource) throws DataError {
+
+        var message = response (resource);
+        Json.Node rootnode;
+
+        if (message == null) {
             throw new DataError.NO_CONNECTION (@"unable to read response");
         }
         try {
+            var body = (string) message.response_body.data;
             rootnode = Json.from_string (body);
         } catch (Error e) {
             throw new DataError.PARSE_DATA (@"unable to parse JSON response: $(e.message)");
@@ -248,7 +278,6 @@ public class Client : Object {
             resource += @"&name=$(params.text)";
         }
         if (params.tags == null) {
-            warning ("param tags is null");
         }
         if (params.tags.size > 0 ) {
             string tag_list = params.tags[0];
@@ -278,12 +307,13 @@ public class Client : Object {
 
     public ArrayList<Tag> get_tags () throws DataError {
         var resource = @"json/tags";
-        var message = new Soup.Message ("GET", @"$current_server/$resource");
+        var message = response (resource);
         Json.Node rootnode;
 
-        var response_code = _session.send_message (message);
-        debug (@"response from radio-browser.info: $response_code");
-        var body = (string) message.response_body.data;
+        string? body = null;
+        if (message != null) {
+            body = (string) message.response_body.data;
+        }
 
         try {
             rootnode = Json.from_string (body);
