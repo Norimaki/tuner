@@ -24,6 +24,10 @@ public class Tuner.Application : Gtk.Application {
     public PlayerController player { get; construct; }
     public string? cache_dir { get; construct; }
     public string? data_dir { get; construct; }
+    public string? tmp_dir { get; construct; }
+    public string? lock_tmp_dir { get; construct; }
+    //public static int64? monotonic_time { get; private set; }
+
 
     public Window window;
 
@@ -41,6 +45,7 @@ public class Tuner.Application : Gtk.Application {
             application_id: APP_ID,
             flags: ApplicationFlags.FLAGS_NONE
         );
+
     }
 
     construct {
@@ -48,6 +53,9 @@ public class Tuner.Application : Gtk.Application {
         GLib.Intl.bindtextdomain (GETTEXT_PACKAGE, LOCALEDIR);
         GLib.Intl.bind_textdomain_codeset (GETTEXT_PACKAGE, "UTF-8");
         GLib.Intl.textdomain (GETTEXT_PACKAGE);
+
+        //monotonic_time =  get_monotonic_time();
+        //debug (@"#gui $(monotonic_time.to_string ("%"+int64.FORMAT))");
 
         settings = new GLib.Settings (this.application_id);
         player = new PlayerController ();
@@ -58,6 +66,15 @@ public class Tuner.Application : Gtk.Application {
         data_dir = Path.build_filename (Environment.get_user_data_dir (), application_id);
         ensure_dir (data_dir);
 
+        tmp_dir = Path.build_filename (Environment.get_tmp_dir (), application_id);
+        ensure_dir (tmp_dir);
+
+        lock_tmp_dir = Path.build_filename (tmp_dir, "lock");
+        clean_dir (lock_tmp_dir);
+        ensure_dir (lock_tmp_dir);
+
+        IconTask.init(cache_dir, lock_tmp_dir);
+        IconTaskLoader.run();
         add_action_entries(ACTION_ENTRIES, this);
     }
 
@@ -75,6 +92,25 @@ public class Tuner.Application : Gtk.Application {
     protected override void activate() {
         if (window == null) {
             window = new Window (this, player);
+
+
+
+
+                 /*        
+            window.configure_event.connect (()=>{
+
+                int width;
+                int height;
+                
+                window.get_size (out width, out height);
+               // Tuner.DebugNot.create("window",@"w $(width.to_string ("%d"))");
+
+                //Tuner.DebugNot.create("window",@"configure_event");
+return true;
+            });
+*/
+
+
             add_window (window);
             DBus.initialize ();
         } else {
@@ -87,19 +123,35 @@ public class Tuner.Application : Gtk.Application {
         window.present();
     }
 
-    private void ensure_dir (string path) {
-        var dir = File.new_for_path (path);
-        
+    private static void clean_dir (string path) {
+        FileInfo? info = null;
+        FileEnumerator? enumerator = null;
+        File folder = File.new_for_path (path);
         try {
-            debug (@"Ensuring dir exists: $path");
-            dir.make_directory ();
-
+            enumerator = folder.enumerate_children (
+                "standard::*",
+                FileQueryInfoFlags.NOFOLLOW_SYMLINKS,null);
+    
+                while ((info = enumerator.next_file ()) != null) {
+                    try {
+                        File file = folder.resolve_relative_path (info.get_name ());
+                        file.delete();
+                    } catch (Error e) {
+                    }
+                }
         } catch (Error e) {
-            // TODO not enough error handling
-            // What should happen when there is another IOERROR?
-            if (!(e is IOError.EXISTS)) {
-                warning (@"dir couldn't be created: %s", e.message);
+        }
+    }
+
+    private static void ensure_dir (string path) {
+        if (!FileUtils.test(path, FileTest.EXISTS)) {
+            var ret = DirUtils.create_with_parents (path, 0700);
+            if (ret != 0) {
+                warning ("%s couldn't be created. Error: %d", path, GLib.FileUtils.error_from_errno (GLib.errno));
             }
+        }
+        if (!FileUtils.test(path, FileTest.IS_DIR)) {
+            error (@"$(path) is not a dir");
         }
     }
 

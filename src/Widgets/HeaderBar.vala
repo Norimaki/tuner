@@ -34,14 +34,16 @@ public class Tuner.HeaderBar : Gtk.HeaderBar {
     public Gtk.VolumeButton volume_button;
 
     private Gtk.Button star_button;
-    private bool _starred = false;
     private Model.Station _station;
     private Gtk.Label _title_label;
     private RevealLabel _subtitle_label;
     private Gtk.Image _favicon_image;
 
-    public signal void star_clicked (bool starred);
+    public signal void star_clicked (Model.Station s);
     public signal void searched_for (string text);
+    public signal void searched_for_thr (string text);
+    private uint search_source = 0;
+
     public signal void search_focused ();
 
     construct {
@@ -65,6 +67,11 @@ public class Tuner.HeaderBar : Gtk.HeaderBar {
         play_button = new Gtk.Button ();
         play_button.valign = Gtk.Align.CENTER;
         play_button.action_name = Window.ACTION_PREFIX + Window.ACTION_PAUSE;
+        play_button.image = new Gtk.Image.from_icon_name (
+            "media-playback-pause-symbolic",
+            Gtk.IconSize.LARGE_TOOLBAR
+        );
+        play_button.sensitive = false;
         pack_start (play_button);
 
         var prefs_button = new Gtk.MenuButton ();
@@ -78,13 +85,33 @@ public class Tuner.HeaderBar : Gtk.HeaderBar {
         var searchentry = new Gtk.SearchEntry ();
         searchentry.valign = Gtk.Align.CENTER;
         searchentry.placeholder_text = _("Station name");
-        searchentry.search_changed.connect (() => {
-            searched_for (searchentry.text);
+        searchentry.search_changed.connect ((e) => {
+
+            if (search_source != 0){
+                Source.remove(search_source);
+            }
+            search_source = Timeout.add (1024, () => {
+                searched_for (e.text);
+                search_source = 0;
+                return false;
+            });
+            
         });
+
+        searchentry.activate.connect ((e) => {
+            if (search_source != 0){
+                Source.remove(search_source);
+            }
+            searched_for (e.text);
+            search_source = 0;
+        });
+
         searchentry.focus_in_event.connect ((e) => {
             search_focused ();
             return true;
         });
+
+
         pack_end (searchentry);
 
         star_button = new Gtk.Button.from_icon_name (
@@ -92,12 +119,11 @@ public class Tuner.HeaderBar : Gtk.HeaderBar {
             Gtk.IconSize.LARGE_TOOLBAR
         );
         star_button.valign = Gtk.Align.CENTER;
-        star_button.sensitive = true;
+        star_button.sensitive = false;
         star_button.tooltip_text = _("Star this station");
         star_button.clicked.connect (() => {
-            star_clicked (starred);
+            star_clicked (_station);
         });
-
         pack_start (star_button);
 
         volume_button = new Gtk.VolumeButton ();
@@ -106,9 +132,7 @@ public class Tuner.HeaderBar : Gtk.HeaderBar {
             Application.instance.settings.set_double ("volume", value);
         });
         pack_start (volume_button);
-        
 
-        set_playstate (PlayState.PAUSE_INACTIVE);
     }
 
     public new string title {
@@ -139,7 +163,11 @@ public class Tuner.HeaderBar : Gtk.HeaderBar {
     }
 
     public void handle_station_change () {
-        starred = _station.starred;
+        if (!_station.starred) {
+            star_button.image = new Gtk.Image.from_icon_name ("non-starred",    Gtk.IconSize.LARGE_TOOLBAR);
+        } else {
+            star_button.image = new Gtk.Image.from_icon_name ("starred",    Gtk.IconSize.LARGE_TOOLBAR);
+        }
     }
 
     public void update_from_station (Model.Station station) {
@@ -152,93 +180,67 @@ public class Tuner.HeaderBar : Gtk.HeaderBar {
         });
         title = station.title;
         subtitle = _("Playing");
-        load_favicon (station.favicon_url);
-        starred = station.starred;
+        load_favicon (station.id, station.favicon_url);
+        handle_station_change ();
     }
 
-    private bool starred {
-        get {
-            return _starred;
-        }
-
-        set {
-            _starred = value;
-            if (!_starred) {
-                star_button.image = new Gtk.Image.from_icon_name ("non-starred",    Gtk.IconSize.LARGE_TOOLBAR);
-            } else {
-                star_button.image = new Gtk.Image.from_icon_name ("starred",    Gtk.IconSize.LARGE_TOOLBAR);
-            }
-        }
+    private void load_favicon (string id, string url) {
+        //We can make icon from cache as it should be downloaded.
+        //TODO: sv
+        IconTask.make_icon(id, "", favicon, false);
+        return;
     }
 
-    private void load_favicon (string url) {
-        // Set default icon first, in case loading takes long or fails
-        favicon.set_from_icon_name (DEFAULT_ICON_NAME, Gtk.IconSize.DIALOG);
-        if (url.length == 0) {
-            return;
-        }
 
-        var session = new Soup.Session ();
-        var message = new Soup.Message ("GET", url);
-
-        session.queue_message (message, (sess, mess) => {
-            if (mess.status_code != 200) {
-                warning (@"Unexpected status code: $(mess.status_code), will not render $(url)");
-                return;
-            }
-
-            var data_stream = new MemoryInputStream.from_data (mess.response_body.data);
-            Gdk.Pixbuf pxbuf;
-
-            try {
-                pxbuf = new Gdk.Pixbuf.from_stream_at_scale (data_stream, 48, 48, true, null);
-            } catch (Error e) {
-                warning ("Couldn't render favicon: %s (%s)",
-                    url ?? "unknown url",
-                    e.message);
-                return;
-            }
-
-            favicon.set_from_pixbuf (pxbuf);
-            favicon.set_size_request (48, 48);
-        });
-    }
-
-    public void set_playstate (PlayState state) {
-        switch (state) {
-            case PlayState.PLAY_ACTIVE:
-                play_button.image = new Gtk.Image.from_icon_name (
-                    "media-playback-start-symbolic",
-                    Gtk.IconSize.LARGE_TOOLBAR
-                );
-                play_button.sensitive = true;
-                star_button.sensitive = true;
-                break;
-            case PlayState.PLAY_INACTIVE:
-                play_button.image = new Gtk.Image.from_icon_name (
-                    "media-playback-start-symbolic",
-                    Gtk.IconSize.LARGE_TOOLBAR
-                );
-                play_button.sensitive = false;
-                star_button.sensitive = false;
-                break;
-            case PlayState.PAUSE_ACTIVE:
-                play_button.image = new Gtk.Image.from_icon_name (
-                    "media-playback-pause-symbolic",
-                    Gtk.IconSize.LARGE_TOOLBAR
-                );
-                play_button.sensitive = true;
-                star_button.sensitive = true;
-                break;
-            case PlayState.PAUSE_INACTIVE:
+    public void on_player_state_changed (Gst.PlayerState? state, bool can_play) {
+        
+        if (state == null){
+            Gdk.threads_add_idle (() => {
                 play_button.image = new Gtk.Image.from_icon_name (
                     "media-playback-pause-symbolic",
                     Gtk.IconSize.LARGE_TOOLBAR
                 );
                 play_button.sensitive = false;
                 star_button.sensitive = false;
-                break;
+                return false;
+            });
+        }
+        else if (state == Gst.PlayerState.BUFFERING || state == Gst.PlayerState.PLAYING){
+            Gdk.threads_add_idle (() => {
+                play_button.image = new Gtk.Image.from_icon_name (
+                    "media-playback-pause-symbolic",
+                    Gtk.IconSize.LARGE_TOOLBAR
+                );
+                play_button.sensitive = true;
+                star_button.sensitive = true;
+                return false;
+            });
+        }
+        else if (can_play){
+            Gdk.threads_add_idle (() => {
+                play_button.image = new Gtk.Image.from_icon_name (
+                    "media-playback-start-symbolic",
+                    Gtk.IconSize.LARGE_TOOLBAR
+                );
+                play_button.sensitive = true;
+                star_button.sensitive = true;
+                return false;
+            });
+        }
+        else{
+            Gdk.threads_add_idle (() => {
+                play_button.image = new Gtk.Image.from_icon_name (
+                    "media-playback-start-symbolic",
+                    Gtk.IconSize.LARGE_TOOLBAR
+                );
+                play_button.sensitive = false;
+                star_button.sensitive = false;
+                return false;
+            });
         }
     }
+
+  
+
 
 }

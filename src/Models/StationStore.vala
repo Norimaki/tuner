@@ -26,6 +26,8 @@ using Gee;
 namespace Tuner.Model {
 
 public class StationStore : Object {
+    public signal void favourites_updated ();
+    
     private ArrayList<Station> _store;
     private File _data_file;
 
@@ -39,18 +41,37 @@ public class StationStore : Object {
         debug (@"store initialized in path $data_path");
     }
 
+    public void import (Station station) {
+        _add (station);
+    }
+
     public void add (Station station) {
+        //Tuner.DebugNot.create("add+persist ",@"$(station.id)");
+
         _add (station);
         persist ();
     }
 
     private void _add (Station station) {
+        station.starred = true;
         _store.add (station);
         // TODO Should we do a sorted insert?
     }
 
     public void remove (Station station) {
+        //Tuner.DebugNot.create("remove+persist ",@"$(station.id)");
+        station.starred = false;
+
+        if (_store.contains (station)){
+            //Tuner.DebugNot.create("remove+persist",@"existe");
+        }
+        else{
+            //Tuner.DebugNot.create("remove+persist",@"no existe");
+        }
+        //Tuner.DebugNot.create("remove+persist size before",@"$(_store.size)");
         _store.remove (station);
+        //Tuner.DebugNot.create("remove+persist size after",@"$(_store.size)");
+
         persist ();
     }
 
@@ -66,8 +87,9 @@ public class StationStore : Object {
         }
     }
 
-    private void load () {
+    public void load () {
         debug ("loading store");
+        _store = new ArrayList<Station> ();
         Json.Parser parser = new Json.Parser ();
         
         try {
@@ -82,16 +104,6 @@ public class StationStore : Object {
         Json.Array array = node.get_array ();
         array.foreach_element ((a, i, elem) => {
             Station station = Json.gobject_deserialize (typeof (Station), elem) as Station;
-            // TODO This should probably not be here but in 
-            // DirectoryController
-            station.notify["starred"].connect ( (sender, property) => {
-                if (station.starred) {
-                    this.add (station);
-                } else {
-                    this.remove (station);
-                }
-            });
-    
             _add (station);
         });
 
@@ -99,7 +111,12 @@ public class StationStore : Object {
     }
 
     private void persist () {
-        debug ("persisting store");
+       // Tuner.DebugNot.create("persist","persist");
+        save();
+        favourites_updated ();
+    }
+
+    public void save () {
         var data = serialize ();
         
         try {
@@ -131,8 +148,8 @@ public class StationStore : Object {
         return data;
     }
 
-    public ArrayList<Station> get_all () {
-        return _store;
+    public ArrayList<Station> get_all () throws SourceError{
+       return _store;
     }
 
     public bool contains (Station station) {
@@ -142,6 +159,14 @@ public class StationStore : Object {
             }
         }
         return false;
+    }
+
+    public void toogle__ (Station station){
+        if (!station.starred) {
+            add (station); //store toogle starred
+        } else {
+            remove (station);
+        }
     }
 }
 

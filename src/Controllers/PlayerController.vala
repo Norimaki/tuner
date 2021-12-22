@@ -28,8 +28,15 @@ public class Tuner.PlayerController : Object {
     public signal void state_changed (Gst.PlayerState state);
     public signal void title_changed (string title);
     public signal void volume_changed (double volume);
+    public signal void ping ();
+    public bool pinged = false;
+
 
     construct {
+        ping.connect (() => {
+            debug (@"#auto PINGED ");
+            pinged = true;
+        });
         player = new Gst.Player (null, null);
         player.state_changed.connect ((state) => {
             // Don't forward flickering between playing and buffering

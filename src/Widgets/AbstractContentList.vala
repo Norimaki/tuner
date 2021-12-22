@@ -20,6 +20,20 @@
 
 public abstract class Tuner.AbstractContentList : Gtk.FlowBox {
 
+    public string title { get; set; }
+
+
     public abstract uint item_count { get; set; }
 
+    public override void get_preferred_width (out int _minimum_width, out int _natural_width) {
+
+        int minimum_width;
+        int natural_width;
+        base.get_preferred_width(out minimum_width, out natural_width);
+        _minimum_width = 200;
+        _natural_width = natural_width;
+        if (_natural_width < _minimum_width){
+            _natural_width = _minimum_width;
+        }
+    }
 }

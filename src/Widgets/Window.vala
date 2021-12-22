@@ -20,16 +20,88 @@
 
 using Gee;
 
+
+
+public class Tuner.Winman : Object {
+
+    public static Winman _instance = null;
+
+    private int content_width;
+
+    public int target_cols {get; private set;}
+    public bool win_maximized {get; private set;}
+
+    public signal void target_cols_up(int target_cols);
+    public signal void win_is_maximized(bool status);
+
+    public static Winman instance {
+        get {
+            if (_instance == null) {
+                _instance = new Winman ();
+            }
+            return _instance;
+        }
+    }
+
+    public static int calc_cols(int w){
+        int c = (int)(w * 100000 / 250.00);
+        int resto = c % 100000;
+        int b = 0;
+        if (resto >= 50000){
+        b=100000;
+        }
+        int cols = (c + b - resto)/100000;
+        if (cols < 1 ) cols = 1;
+        return cols;
+    }
+
+    public void set_maximized(bool status){
+        win_maximized = status;
+        win_is_maximized(win_maximized);
+    }
+
+    public void get_flow_width(Gtk.Container c){
+        content_width = c.get_allocated_width ();
+        set_cols_from (content_width);
+    }
+
+    public void set_cols_from(int w){
+        int c = calc_cols(w);
+        if (c != target_cols){
+            target_cols = c;
+            target_cols_up(target_cols);
+        }
+    }
+
+    private Winman (){
+        
+    }
+
+    construct{
+        target_cols = 1;
+    }
+}
+
+
 public class Tuner.Window : Gtk.ApplicationWindow {
 
     public GLib.Settings settings { get; construct; }
-    public Gtk.Stack stack { get; set; }
-    public PlayerController player { get; construct; }
+    private Gtk.Paned primary_box;
+    private Gtk.Box e_box;
+    private Gtk.Stack e_stack;
+    private Gtk.Label nnnn;
+    private Gtk.Stack mainstack;
+    private Gtk.Stack content_stack;
 
-    private DirectoryController _directory;
     private HeaderBar headerbar;
-    private Granite.Widgets.SourceList source_list;
-    
+    private SourceListView source_list;
+    private ContentBox starred;
+    private GridView my_country_gview;
+    private GridView searched_gview;
+
+    public PlayerController player { get; construct; }
+    private DirectoryController _directory;
+
     public const string WindowName = "Tuner";
     public const string ACTION_PREFIX = "win.";
     public const string ACTION_PAUSE = "action_pause";
@@ -39,7 +111,13 @@ public class Tuner.Window : Gtk.ApplicationWindow {
     public const string ACTION_DISABLE_TRACKING = "action_disable_tracking";
     public const string ACTION_ENABLE_AUTOPLAY = "action_enable_autoplay";
 
-    private signal void refresh_favourites ();
+    private uint set_cols_source = 0;
+    private uint set_cols_source_timeout = 0;
+
+    private signal void favourites_changed ();
+    private signal void on_results ();
+    public signal void search_term_changed(string term);
+    public signal void location_changed(string country_code);
 
     private const ActionEntry[] ACTION_ENTRIES = {
         { ACTION_PAUSE, on_toggle_playback },
@@ -49,15 +127,6 @@ public class Tuner.Window : Gtk.ApplicationWindow {
         { ACTION_ENABLE_AUTOPLAY, on_action_enable_autoplay, null, "false" }
     };
 
-    static construct {
-        var provider = new Gtk.CssProvider ();
-        provider.load_from_resource ("com/github/louis77/tuner/Application.css");
-        Gtk.StyleContext.add_provider_for_screen (
-            Gdk.Screen.get_default (), 
-            provider, 
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        );
-    }
 
     public Window (Application app, PlayerController player) {
         Object (
@@ -71,12 +140,223 @@ public class Tuner.Window : Gtk.ApplicationWindow {
         application.set_accels_for_action (ACTION_PREFIX + ACTION_QUIT, {"<Control>w"});
     }
 
+    static construct {
+        var provider = new Gtk.CssProvider ();
+        provider.load_from_resource ("com/github/louis77/tuner/Application.css");
+        Gtk.StyleContext.add_provider_for_screen (
+            Gdk.Screen.get_default (), 
+            provider, 
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        );
+    }
+
+    private static void adjust_theme() {
+        var theme = Application.instance.settings.get_string("theme-mode");
+        warning(@"current theme: $theme");
+        
+        var gtk_settings = Gtk.Settings.get_default ();
+        var granite_settings = Granite.Settings.get_default ();
+        if (theme != "system") {
+            gtk_settings.gtk_application_prefer_dark_theme = (theme == "dark");
+        } else {
+            gtk_settings.gtk_application_prefer_dark_theme = (granite_settings.prefers_color_scheme == Granite.Settings.ColorScheme.DARK);
+        }
+    }
+
+
+
+    private void e_box_mapped(){
+        e_box.map.disconnect(e_box_mapped);
+        Tuner.Winman.instance.get_flow_width(e_box);
+    }
+
+    private void e_stack_mapped(){
+        e_stack.map.disconnect(e_stack_mapped);
+        if (!Tuner.Winman.instance.win_maximized){
+            Tuner.Winman.instance.get_flow_width(e_stack);
+            this.size_allocate.connect (on_window_resize);
+        }
+        Tuner.Winman.instance.win_is_maximized.connect((maximized)=>{
+            Tuner.Winman.instance.get_flow_width(e_stack);
+            if (!maximized){
+                this.size_allocate.connect (on_window_resize);
+            } 
+        });
+    }
+
+    private void primary_box_mapped(){
+        primary_box.map.disconnect(primary_box_mapped);
+        content_stack.show();
+        e_stack.set_visible_child_name ("content_stack");
+    }
+
+    private void show_primary(){
+        e_box.map.connect_after((e_box_mapped));
+
+        e_stack.map.connect_after(e_stack_mapped);
+        primary_box.map.connect_after(primary_box_mapped);
+        primary_box.show();
+        mainstack.set_visible_child_name ("primary_box");
+
+    }
+
+   
+
+
+
+
     construct {
+
+        var data_file = Path.build_filename (Application.instance.data_dir, "favorites.json");
+        var store = new Model.StationStore (data_file);
+        _directory = new DirectoryController (store);
+
         headerbar = new HeaderBar ();
         set_titlebar (headerbar);
         set_title (WindowName);
 
-        player.state_changed.connect (handleplayer_state_changed);
+        primary_box = new Gtk.Paned (Gtk.Orientation.HORIZONTAL);
+
+        content_stack = new Gtk.Stack();
+        content_stack.set_hexpand (true);
+        content_stack.set_size_request (200, -1);
+        content_stack.transition_type = Gtk.StackTransitionType.CROSSFADE;
+
+        source_list = new SourceListView(content_stack);
+        source_list.ellipsize_mode = Pango.EllipsizeMode.NONE;
+        source_list.set_hexpand (false);
+        source_list.selection_changed.connect(on_selection_changed);
+
+
+        e_box = new Gtk.Box (Gtk.Orientation.HORIZONTAL,0);
+        e_stack = new Gtk.Stack ();
+        e_stack.set_size_request (200, -1);
+        e_stack.set_hexpand (true);
+        e_stack.add_named (e_box, "e_box");
+        e_stack.add_named (content_stack, "content_stack");
+
+
+
+
+        ContentBox discover = new ContentBox (_directory,"discover",
+        _("Discover Stations"), 
+        "media-playlist-shuffle-symbolic",
+        _("Discover more stations")
+        );
+        discover.station_selected.connect_after(on_station_selected);
+        discover.sourcedata = _directory.load_random_stations(40);
+        GridView discover_gview = new GridView(discover,content_stack);
+        source_list.add_item(
+            discover_gview, 
+            _("Discover"), 
+            Tuner.ViewWrapper.Hint.SELECTION, 
+            new ThemedIcon ("face-smile"), 
+            null);
+
+        ContentBox trending = new ContentBox (_directory,"trending",
+        _("Trending in the last 24 hours"), 
+        null, 
+        null
+        );
+        trending.station_selected.connect_after(on_station_selected);
+        trending.sourcedata = _directory.load_trending_stations(200);
+        GridView trending_gview = new GridView(trending,content_stack);
+        source_list.add_item(
+            trending_gview, 
+            _("Trending"), 
+            Tuner.ViewWrapper.Hint.SELECTION, 
+            new ThemedIcon ("playlist-queue"), 
+            null);
+       
+        ContentBox popular = new ContentBox (_directory,"popular",
+        _("Most-listened over 24 hours"), 
+        null, 
+        null
+        );
+        popular.station_selected.connect_after(on_station_selected);
+        popular.sourcedata = _directory.load_popular_stations(200);
+        GridView popular_gview = new GridView(popular,content_stack);
+        source_list.add_item(
+            popular_gview, 
+            _("Popular"), 
+            Tuner.ViewWrapper.Hint.SELECTION, 
+            new ThemedIcon ("playlist-similar"), 
+            null);
+
+        ContentBox my_country = new ContentBox (_directory,"my_country",
+        _("my_country"), 
+        null, 
+        null
+        );
+        my_country.station_selected.connect_after(on_station_selected);
+        my_country_gview = new GridView(my_country,content_stack);
+
+        starred = new ContentBox (_directory,"starred",
+        _("Starred by You"), 
+        null, 
+        null
+        );
+        starred.station_selected.connect_after(on_station_selected);
+        starred.sourcedata = _directory.load_favs();
+        GridView starred_gview = new GridView(starred,content_stack);
+        source_list.add_item(
+            starred_gview, 
+            _("Starred by You"), 
+            Tuner.ViewWrapper.Hint.FAVORITE_RESULTS, 
+            new ThemedIcon ("starred"), 
+            null);
+
+        ContentBox searched = new ContentBox (_directory,"searched",
+        _("Search"), 
+        null, 
+        null
+        );
+        searched.station_selected.connect_after(on_station_selected);
+        searched_gview = new GridView(searched,content_stack);
+        source_list.add_item(
+            searched_gview, 
+            _("Recent Search"), 
+            Tuner.ViewWrapper.Hint.SEARCH_RESULTS, 
+            new ThemedIcon ("folder-saved-search"), 
+            null);
+
+        foreach (var genre in Model.genres ()) {
+            ContentBox genre_item = new ContentBox (_directory,genre.name+"_genre",
+            genre.name, 
+            null, 
+            null
+            );
+            genre_item.station_selected.connect_after(on_station_selected);
+            var tags = new ArrayList<string>.wrap (genre.tags);
+            genre_item.sourcedata = _directory.load_by_tags (tags);
+            GridView genre_item_gview = new GridView(genre_item,content_stack);
+            source_list.add_item(
+                genre_item_gview, 
+                genre.name, 
+                Tuner.ViewWrapper.Hint.GENRE, 
+                new ThemedIcon ("playlist-symbolic"), 
+                null);
+        }
+
+                // Excluded Countries Box
+        /* not finished yet 
+        var item7 = new Granite.Widgets.SourceList.Item (_("Excluded Countries"));
+        item7.icon = new ThemedIcon ("folder-saved-search");
+        searched_category.add (item7);
+        var c6 = create_content_box ("excluded_countries", item7,
+            _("Excluded Countries"), null, null,
+            stack, source_list, true);
+        c6.content = new CountryList ();
+        */
+        
+        store.favourites_updated.connect (handle_favourites_updated);
+
+        search_term_changed.connect(on_search_term_changed);
+        favourites_changed.connect(on_favourites_changed);
+        location_changed.connect(on_location_changed);
+
+
+        player.state_changed.connect (on_player_state_changed);
         player.station_changed.connect (headerbar.update_from_station);
         player.title_changed.connect ((title) => {
             headerbar.subtitle = title;
@@ -87,6 +367,34 @@ public class Tuner.Window : Gtk.ApplicationWindow {
         headerbar.volume_button.value_changed.connect ((value) => {
             player.volume = value;
         });
+        headerbar.star_clicked.connect ( (station) => {
+            _directory.station_starred_toggled_handler(station);
+        });
+        headerbar.searched_for.connect ( (text) => {
+            search_term_changed(text);
+        });
+
+        //TODO: Select item
+        headerbar.search_focused.connect (() => {
+            content_stack.visible_child_name = "searched";
+
+        });
+        //Tuner.Winman.instance.player = player;
+        //Tuner.Winman.instance.station_changed.connect_after(on_station_changed);
+
+        LocationDiscovery.country_code.begin ((obj, res) => {
+            string country;
+            try {
+                country = LocationDiscovery.country_code.end(res);
+            } catch (GLib.Error e) {
+                // GeoLocation Service might not be available
+                // We don't do anything about it
+                return;
+            }
+
+            location_changed(country);
+        });
+
 
         adjust_theme();
         settings.changed.connect( (key) => {
@@ -107,342 +415,197 @@ public class Tuner.Window : Gtk.ApplicationWindow {
 
         window_position = Gtk.WindowPosition.CENTER;
         set_default_size (800, 540);
+        set_geometry_hints (null, Gdk.Geometry() {min_height = 440, min_width = 600}, Gdk.WindowHints.MIN_SIZE);
+
         change_action_state (ACTION_DISABLE_TRACKING, settings.get_boolean ("do-not-track"));
         change_action_state (ACTION_ENABLE_AUTOPLAY, settings.get_boolean ("auto-play"));
+        
         move (settings.get_int ("pos-x"), settings.get_int ("pos-y"));
-
-        set_geometry_hints (null, Gdk.Geometry() {min_height = 440, min_width = 600}, Gdk.WindowHints.MIN_SIZE);
         resize (settings.get_int ("window-width"), settings.get_int ("window-height"));
+        if (settings.get_int("window-status") == 1){
+        maximize();
+        }
 
         delete_event.connect (e => {
             return before_destroy ();
         });
 
-        var stack = new Gtk.Stack ();
-        stack.transition_type = Gtk.StackTransitionType.CROSSFADE;
-        
-        var data_file = Path.build_filename (Application.instance.data_dir, "favorites.json");
-        var store = new Model.StationStore (data_file);
-        _directory = new DirectoryController (store);
-
-        var primary_box = new Gtk.Paned (Gtk.Orientation.HORIZONTAL);
-
-
-        var selections_category = new Granite.Widgets.SourceList.ExpandableItem (_("Selections"));
-        selections_category.collapsible = false;
-        selections_category.expanded = true;
-
-        var searched_category = new Granite.Widgets.SourceList.ExpandableItem (_("Library"));
-        searched_category.collapsible = false;
-        searched_category.expanded = true;
-
-        var genres_category = new Granite.Widgets.SourceList.ExpandableItem (_("Genres"));
-        genres_category.collapsible = true;
-        genres_category.expanded = true;
-        
-        source_list = new Granite.Widgets.SourceList ();
-
-        // Discover Box
-        var item1 = new Granite.Widgets.SourceList.Item (_("Discover"));
-        item1.icon = new ThemedIcon ("face-smile");
-        selections_category.add (item1);
-
-        var c1 = create_content_box ("discover", item1,
-                            _("Discover Stations"), "media-playlist-shuffle-symbolic",
-                            _("Discover more stations"),
-                            stack, source_list);
-        var s1 = _directory.load_random_stations(20);
-        c1.realize.connect (() => {
-            try {
-                var slist = new StationList.with_stations (s1.next ());
-                slist.selection_changed.connect (handle_station_click);
-                slist.favourites_changed.connect (handle_favourites_changed);
-                c1.content = slist;
-            } catch (SourceError e) {
-                c1.show_alert ();
-            }
-        });
-        c1.action_activated.connect (() => {
-            try {
-                var slist = new StationList.with_stations (s1.next ());
-                slist.selection_changed.connect (handle_station_click);
-                slist.favourites_changed.connect (handle_favourites_changed);
-                c1.content = slist;
-            } catch (SourceError e) {
-                c1.show_alert ();
-            }
-        });
-
-        // Trending Box
-        var item2 = new Granite.Widgets.SourceList.Item (_("Trending"));
-        item2.icon = new ThemedIcon ("playlist-queue");
-        selections_category.add (item2);
-                
-        var c2 = create_content_box ("trending", item2,
-                            _("Trending in the last 24 hours"), null, null,
-                            stack, source_list);
-        var s2 = _directory.load_trending_stations(40);
-        c2.realize.connect (() => {
-            try {
-                var slist = new StationList.with_stations (s2.next ());
-                slist.selection_changed.connect (handle_station_click);
-                slist.favourites_changed.connect (handle_favourites_changed);
-                c2.content = slist;
-            } catch (SourceError e) {
-                c2.show_alert ();
-            }
-
-        });
-
-        // Popular Box
-        var item3 = new Granite.Widgets.SourceList.Item (_("Popular"));
-        item3.icon = new ThemedIcon ("playlist-similar");
-        selections_category.add (item3);
-                                
-        var c3 = create_content_box ("popular", item3,
-                            _("Most-listened over 24 hours"), null, null,
-                            stack, source_list);
-        var s3 = _directory.load_popular_stations(40);
-        c3.realize.connect (() => {
-            try {
-                var slist = new StationList.with_stations (s3.next ());
-                slist.selection_changed.connect (handle_station_click);
-                slist.favourites_changed.connect (handle_favourites_changed);
-                c3.content = slist;
-            } catch (SourceError e) {
-                c3.show_alert ();
-            }
-        });
-
-        // Country-specific stations list
-        var item4 = new Granite.Widgets.SourceList.Item (_("Your Country"));
-        item4.icon = new ThemedIcon ("emblem-web");
-        ContentBox c_country;
-        c_country = create_content_box ("my-country", item4,
-                            _("Your Country"), null, null,
-                            stack, source_list, true);
-        var c_slist = new StationList ();
-        c_slist.selection_changed.connect (handle_station_click);
-        c_slist.favourites_changed.connect (handle_favourites_changed);
-
-        LocationDiscovery.country_code.begin ((obj, res) => {
-            string country;
-            try {
-                country = LocationDiscovery.country_code.end(res);
-            } catch (GLib.Error e) {
-                // GeoLocation Service might not be available
-                // We don't do anything about it
-                return;
-            }
-
-            var country_name = Model.Countries.get_by_code (country);
-            item4.name = country_name;
-            c_country.header_label.label = _("Top 100 in") + " " + country_name;
-            var s_country = _directory.load_by_country (100, country);
-            selections_category.add (item4);
-            c_country.realize.connect (() => {
-                try {
-                    var stations = s_country.next ();
-                    c_slist.stations = stations;
-                    warning (@"Length of country stations: $(stations.size)");
-                    c_country.content = c_slist;
-                } catch (SourceError e) {
-                    c_country.show_alert ();
-                }
-            });
-        });
- 
-        // Favourites Box
-        var item5 = new Granite.Widgets.SourceList.Item (_("Starred by You"));
-        item5.icon = new ThemedIcon ("starred");
-        searched_category.add (item5);
-        var c4 = create_content_box ("starred", item5,
-                            _("Starred by You"), null, null,
-                            stack, source_list, true);
-        
-        var slist = new StationList.with_stations (_directory.get_stored ());
-        slist.selection_changed.connect (handle_station_click);
-        slist.favourites_changed.connect (handle_favourites_changed);
-        c4.content = slist;
-
-        // Search Results Box
-        var item6 = new Granite.Widgets.SourceList.Item (_("Recent Search"));
-        item6.icon = new ThemedIcon ("folder-saved-search");
-        searched_category.add (item6);
-        var c5 = create_content_box ("searched", item6,
-                            _("Search"), null, null,
-                            stack, source_list, true);
-
-        // Excluded Countries Box
-        /* not finished yet 
-        var item7 = new Granite.Widgets.SourceList.Item (_("Excluded Countries"));
-        item7.icon = new ThemedIcon ("folder-saved-search");
-        searched_category.add (item7);
-        var c6 = create_content_box ("excluded_countries", item7,
-            _("Excluded Countries"), null, null,
-            stack, source_list, true);
-        c6.content = new CountryList ();
-        */
-        
-        // Genre Boxes
-        foreach (var genre in Model.genres ()) {
-            var item8 = new Granite.Widgets.SourceList.Item (_(genre.name));
-            item8.icon = new ThemedIcon ("playlist-symbolic");
-            genres_category.add (item8);
-            var cb = create_content_box (genre.name, item8, 
-                genre.name, null, null, stack, source_list);
-            var tags = new ArrayList<string>.wrap (genre.tags);
-            var ds = _directory.load_by_tags (tags);
-            cb.realize.connect (() => {
-                try {
-                    var slist1 = new StationList.with_stations (ds.next ());
-                    slist1.selection_changed.connect (handle_station_click);
-                    slist1.favourites_changed.connect (handle_favourites_changed);
-                    cb.content = slist1;
-                } catch (SourceError e) {
-                    cb.show_alert ();
-                }
-            });
-        }
-
-        headerbar.star_clicked.connect ( (starred) => {
-            player.station.toggle_starred ();
-        });
-
-        refresh_favourites.connect ( () => {
-            var _slist = new StationList.with_stations (_directory.get_stored ()); 
-            _slist.selection_changed.connect (handle_station_click);
-            _slist.favourites_changed.connect (handle_favourites_changed);
-            c4.content = _slist;
-        });
-
-        source_list.root.add (selections_category);
-        source_list.root.add (searched_category);
-        source_list.root.add (genres_category);
-
-        source_list.ellipsize_mode = Pango.EllipsizeMode.NONE;
-        source_list.selected = source_list.get_first_child (selections_category);
-        source_list.item_selected.connect  ((item) => {
-            var selected_item = item.get_data<string> ("stack_child");
-            stack.visible_child_name = selected_item;
-        });
-
-        headerbar.searched_for.connect ( (text) => {
-            if (text.length > 0) {
-                string mytext = text;
-                var s5 = _directory.load_search_stations (mytext, 100); 
-                try {
-                    var stations = s5.next ();
-                    if (stations == null || stations.size == 0) {
-                        c5.show_nothing_found ();
-                    } else {
-                        var _slist = new StationList.with_stations (stations);
-                        _slist.selection_changed.connect (handle_station_click);
-                        _slist.favourites_changed.connect (handle_favourites_changed);
-                        c5.content = _slist;
-                    }
-                } catch (SourceError e) {
-                    c5.show_alert ();
-                }    
-            }
-        });
-
-        headerbar.search_focused.connect (() => {
-            stack.visible_child_name = "searched";
-        });
-
         primary_box.pack1 (source_list, false, false);
-        primary_box.pack2 (stack, true, false);
-        add (primary_box);
-        show_all ();
+        primary_box.pack2 (e_stack, true, false);
+
+        mainstack = new Gtk.Stack ();
+        nnnn = new Gtk.Label (null);        
+        nnnn.set_text ("Loading");
+        mainstack.add_named (nnnn, "nnnn") ;
+        mainstack.add_named (primary_box, "primary_box") ;
+        add (mainstack);
+        this.window_state_event.connect(on_window_state_event);
+        show_primary();
+
+
+       show_all ();
+       on_selection_changed(discover_gview);
+
+
+        
+
 
         // Auto-play
         if (settings.get_boolean("auto-play")) {
             warning (@"Auto-play enabled");
             var last_played_station = settings.get_string("last-played-station");
             warning (@"Last played station is: $last_played_station");
-
             var source = _directory.load_station_uuid (last_played_station);
-
             try {
                 foreach (var station in source.next ()) {
-                    handle_station_click(station);
+                    handle_station_autoplay(station);
                     break;
                 }  
             } catch (SourceError e) {
                 warning ("Error while trying to autoplay, aborting...");
             }
-
         }
     }
 
-    private ContentBox create_content_box (
-             string name,
-             Granite.Widgets.SourceList.Item item,
-             string full_title,
-             string? action_icon_name,
-             string? action_tooltip_text,
-             Gtk.Stack stack,
-             Granite.Widgets.SourceList source_list,
-             bool enable_count = false) {
-        item.set_data<string> ("stack_child", name);
-        var c = new ContentBox (
-            null,
-            full_title,
-            null,
-            action_icon_name,
-            action_tooltip_text
-        );
-        c.map.connect (() => {
-            source_list.selected = item;
+
+
+
+
+
+    private uint player_ping_source = 0;
+    public void handle_station_autoplay (Tuner.Model.Station station) {
+        debug (@"#auto do handle_station_autoplay $(station.title)");
+        // It's yet last-played-station 
+        // We don't count it as station_click
+        Idle.add (() => {
+            if (!player.pinged){
+                if (player_ping_source==0){
+                    Source.remove (player_ping_source);
+                }
+                player_ping_source = Timeout.add (128, () => {
+                    if (player.pinged){
+                        player.station = station; //It will launch player.station_changed(station)
+                        return false;
+                    }
+                    else{
+                        debug (@"#auto send PING ");
+                        player.ping();
+                        return true;
+                    }
+                });
+            }
+            else{
+                //You shouldn't see it
+                debug (@"#auto DUPLICATE AUTOPLAY CALL");
+            }
+        return false;
         });
-        if (enable_count) {
-            c.content_changed.connect (() => {
-                if (c.content == null) return;
-                var count = c.content.item_count;
-                item.badge = @"$count";
-            });
-        }
-        stack.add_named (c, name);
-
-        return c;
-    }
-    
-    private static void adjust_theme() {
-        var theme = Application.instance.settings.get_string("theme-mode");
-        warning(@"current theme: $theme");
-        
-        var gtk_settings = Gtk.Settings.get_default ();
-        var granite_settings = Granite.Settings.get_default ();
-        if (theme != "system") {
-            gtk_settings.gtk_application_prefer_dark_theme = (theme == "dark");
-        } else {
-            gtk_settings.gtk_application_prefer_dark_theme = (granite_settings.prefers_color_scheme == Granite.Settings.ColorScheme.DARK);
-        }
-    }
-
-    private void on_action_quit () {
-        close ();
-    }
-
-    private void on_action_about () {
-        var dialog = new AboutDialog (this);
-        dialog.present ();
-    }
-
-    public void handle_station_click (Tuner.Model.Station station) {
-        info (@"handle station click for $(station.title)");
-        _directory.count_station_click (station);
-        player.station = station;
-
-        warning (@"storing last played station: $(station.id)");
-        settings.set_string("last-played-station", station.id);
-
         set_title (WindowName+": "+station.title);
     }
 
-    public void handle_favourites_changed () {
-        refresh_favourites ();
+    public void on_favourites_changed (){
+        GLib.Idle.add (() => {
+            starred.refresh();
+            return false;
+        });
+    }
+
+    public void on_selection_changed (GridView view){
+        content_stack.set_visible_child_name(view.name);
+        view.content.selected();
+    }
+
+    //TODO: remove old
+    private void on_location_changed(string country){
+        var country_name = Model.Countries.get_by_code (country);
+        my_country_gview.content.sourcedata = _directory.load_by_country(10,country);
+        my_country_gview.content.header_label.label = _("Top 100 in") + " " + country_name;
+        source_list.add_item(
+            my_country_gview, 
+            _(country_name), 
+            Tuner.ViewWrapper.Hint.SELECTION, 
+            new ThemedIcon ("emblem-web"), 
+            null);
+        
+    }
+
+
+    private void on_search_term_changed(string term){
+        if (term._strip().length == 0) return;
+        searched_gview.content.sourcedata = _directory.load_search_stations (term, 100);
+        searched_gview.content.refresh();
+    }
+
+    private bool on_window_state_event(Gdk.EventWindowState event){
+        this.window_state_event.disconnect(on_window_state_event);
+        if (event.type == Gdk.EventType.WINDOW_STATE) {
+            if ((event.window.get_state () & Gdk.WindowState.MAXIMIZED) == 0) {
+                if (Tuner.Winman.instance.win_maximized){
+                    Tuner.Winman.instance.set_maximized(false);
+                }
+            } else {
+                if (!Tuner.Winman.instance.win_maximized){
+                    Tuner.Winman.instance.set_maximized(true);
+                }
+            }
+        }
+        this.window_state_event.connect(on_window_state_event);
+        return false;
+    }
+
+    private void on_window_resize(){
+        if (set_cols_source != 0){
+            Source.remove(set_cols_source);
+        }
+        else{
+            set_cols_source_timeout = Timeout.add (1024, () => {
+                Tuner.Winman.instance.get_flow_width(e_stack);
+                if (Tuner.Winman.instance.win_maximized){
+                    this.size_allocate.disconnect (on_window_resize);
+                }
+                set_cols_source_timeout = 0;
+                if (set_cols_source != 0){
+                    Source.remove(set_cols_source);
+                    set_cols_source = 0;
+                }
+                return false;
+            });
+        }
+        set_cols_source = Timeout.add (128, () => {
+            Tuner.Winman.instance.get_flow_width(e_stack);
+            if (Tuner.Winman.instance.win_maximized){
+                this.size_allocate.disconnect (on_window_resize);
+            }
+            set_cols_source = 0;
+            if (set_cols_source_timeout != 0){
+                Source.remove(set_cols_source_timeout);
+                set_cols_source_timeout = 0;
+                }
+            return false;
+        });
+    }
+    
+
+    public void on_station_selected (Tuner.Model.Station_View station) {
+        player.pinged = true;
+        info (@"handle station click for $(station.instance.title)");
+        _directory.count_station_click (station.instance);
+        player.station = station.instance;
+
+        warning (@"storing last played station: $(station.instance.id)");
+        settings.set_string("last-played-station", station.instance.id);
+
+        set_title (WindowName+": "+station.instance.title);
+    }
+
+    public void handle_favourites_updated () {
+        favourites_changed ();
+    }
+ 
+
+    public void on_player_state_changed (Gst.PlayerState state) {
+        var can_play = player.can_play();
+        headerbar.on_player_state_changed(state, can_play);
     }
 
     public void on_toggle_playback() {
@@ -450,6 +613,19 @@ public class Tuner.Window : Gtk.ApplicationWindow {
         player.play_pause ();
     }
 
+    private void on_action_quit () {
+        //primary_box.size_allocate.disconnect (calc_w);
+        //this.check_resize.disconnect (calc_w);
+        Tuner.DebugNot.create("win","on_action_quit");
+
+        close ();
+    }
+
+    private void on_action_about () {
+        var dialog = new AboutDialog (this);
+        dialog.present ();
+    }
+    
     public void on_action_disable_tracking (SimpleAction action, Variant? parameter) {
         var new_state = !settings.get_boolean ("do-not-track");
         action.set_state (new_state);
@@ -462,52 +638,12 @@ public class Tuner.Window : Gtk.ApplicationWindow {
         action.set_state (new_state);
         settings.set_boolean ("auto-play", new_state);
         debug (@"on_action_enable_autoplay: $new_state");
-    }    
-
-    public void handleplayer_state_changed (Gst.PlayerState state) {
-        switch (state) {
-            case Gst.PlayerState.BUFFERING:
-                debug ("player state changed to Buffering");
-                Gdk.threads_add_idle (() => {
-                    headerbar.set_playstate (HeaderBar.PlayState.PAUSE_ACTIVE);
-                    return false;
-                });
-                break;;
-            case Gst.PlayerState.PAUSED:
-                debug ("player state changed to Paused");
-                Gdk.threads_add_idle (() => {
-                    if (player.can_play()) {
-                        headerbar.set_playstate (HeaderBar.PlayState.PLAY_ACTIVE);
-                    } else {
-                        headerbar.set_playstate (HeaderBar.PlayState.PLAY_INACTIVE);
-                    }
-                    return false;
-                });
-                break;;
-            case Gst.PlayerState.PLAYING:
-                debug ("player state changed to Playing");
-                Gdk.threads_add_idle (() => {
-                    headerbar.set_playstate (HeaderBar.PlayState.PAUSE_ACTIVE);
-                    return false;
-                });
-                break;;
-            case Gst.PlayerState.STOPPED:
-                debug ("player state changed to Stopped");
-                Gdk.threads_add_idle (() => {
-                    if (player.can_play()) {
-                        headerbar.set_playstate (HeaderBar.PlayState.PLAY_ACTIVE);
-                    } else {
-                        headerbar.set_playstate (HeaderBar.PlayState.PLAY_INACTIVE);
-                    }
-                    return false;
-                });
-                break;
-        }
-
-        return;
-    }
+    }   
 
     public bool before_destroy () {
+
+        //Tuner.DebugNot.create("win","before_destroy");
+
         int width, height, x, y;
 
         get_size (out width, out height);
@@ -517,7 +653,14 @@ public class Tuner.Window : Gtk.ApplicationWindow {
         settings.set_int ("pos-y", y);
         settings.set_int ("window-height", height);
         settings.set_int ("window-width", width);
+        if (Tuner.Winman.instance.win_maximized){
+            settings.set_int ("window-status",1);
+        }
+        else{
+            settings.set_int ("window-status",2);
+        }
 
+        //TODO: playing=true (custom state) or include buffering
         if (player.current_state == Gst.PlayerState.PLAYING) {
             hide_on_delete();
             var notification = new GLib.Notification("Playing in background");
@@ -526,7 +669,10 @@ public class Tuner.Window : Gtk.ApplicationWindow {
             Application.instance.send_notification("continue-playing", notification);
             return true;
         }
+       // primary_box.size_allocate.disconnect (calc_w);
+       // this.check_resize.disconnect (calc_w);
 
+        IconTaskLoader.stop();
         return false;
     }
 

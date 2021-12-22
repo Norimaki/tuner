@@ -46,12 +46,45 @@ public class Tuner.DirectoryController : Object {
         this.migrate_favourites ();
     }
 
+    //used by headerbar. Maybe useless if implement sv on headebar.
+    public void station_starred_toggled_handler (Model.Station s){
+
+        //Tuner.DebugNot.create("fav","station_starred_toggled_handler");
+        if (s.starred) {
+            store.remove (s);
+        } else {
+            store.add (s); //store toogle starred
+        }
+    }
+
+    public void starred_toggled_handler (Model.Station_View sv){
+        station_starred_toggled_handler(sv.instance);
+        //store.toogle(sv.ss.station); //use it if we delete station_starred_changed_handler
+    }
+
+    public ArrayList<Model.Station_View> stations_to_views (owned ArrayList<Model.Station> stations){
+        ArrayList<Model.Station_View> r = new ArrayList<Model.Station_View>();
+
+        foreach (Model.Station station in stations) {
+            var sv = new Model.Station_View.with_station (station);
+            if (sv.instance != station){
+                station = sv.instance; //No funciona aun.
+            }
+            sv.station_starred_toggled.connect(starred_toggled_handler);
+            r.add (sv); 
+           // Tuner.DebugNot.create("f",station.id);
+
+       
+        }  
+        return r;
+    }
+
     public StationSource load_station_uuid (string uuid) {
         string[] lps_arr = { uuid }; 
         var params = RadioBrowser.SearchParams() {
             uuids = new ArrayList<string>.wrap (lps_arr)
         };
-        var source = new StationSource(1, params, provider, store);
+        var source = new RadioSource(1, params, provider, store);
         return source;
     }
 
@@ -62,7 +95,7 @@ public class Tuner.DirectoryController : Object {
             tags  = new ArrayList<string>(),
             order = RadioBrowser.SortOrder.RANDOM
         };
-        var source = new StationSource(limit, params, provider, store);
+        var source = new RadioSource(limit, params, provider, store);
         return source;
     }
 
@@ -74,7 +107,7 @@ public class Tuner.DirectoryController : Object {
             order   = RadioBrowser.SortOrder.CLICKTREND,
             reverse = true
         };
-        var source = new StationSource(limit, params, provider, store);
+        var source = new RadioSource(limit, params, provider, store);
         return source;
     }
 
@@ -86,7 +119,7 @@ public class Tuner.DirectoryController : Object {
             order   = RadioBrowser.SortOrder.CLICKCOUNT,
             reverse = true
         };
-        var source = new StationSource(limit, params, provider, store);
+        var source = new RadioSource(limit, params, provider, store);
         return source;
     }
 
@@ -98,7 +131,7 @@ public class Tuner.DirectoryController : Object {
             order   = RadioBrowser.SortOrder.CLICKCOUNT,
             reverse = true
         };
-        var source = new StationSource(limit, params, provider, store);
+        var source = new RadioSource(limit, params, provider, store);
         return source;
     }
 
@@ -110,12 +143,16 @@ public class Tuner.DirectoryController : Object {
             order   = RadioBrowser.SortOrder.CLICKCOUNT,
             reverse = true
         };
-        var source = new StationSource(limit, params, provider, store); 
+        var source = new RadioSource(limit, params, provider, store); 
         return source;
     }
 
-    public ArrayList<Model.Station> get_stored () {
-        return _store.get_all ();
+    public ArrayList<Model.Station>? get_stored () {
+        try {
+           return _store.get_all ();
+        } catch (SourceError e) {
+           return null;
+        }
     }
 
     public void migrate_favourites () {
@@ -126,11 +163,12 @@ public class Tuner.DirectoryController : Object {
             var params = RadioBrowser.SearchParams() {
                 uuids = new ArrayList<string>.wrap (starred_stations)
             };
-            var source = new StationSource(99999, params, provider, store); 
+            var source = new RadioSource(99999, params, provider, store); 
             try {
                 foreach (var station in source.next ()) {
-                    store.add (station);
+                    store.import (station);
                 }  
+                store.save();
                 settings.set_strv ("starred-stations", null);  
                 warning ("Migration completed, settings deleted");     
             } catch (SourceError e) {
@@ -147,7 +185,12 @@ public class Tuner.DirectoryController : Object {
             order   = RadioBrowser.SortOrder.VOTES,
             reverse = true
         };
-        var source = new StationSource(40, params, provider, store);
+        var source = new RadioSource(40, params, provider, store);
+        return source;
+    }
+
+    public StationSource load_favs () {
+        var source = new FavoritesSource(store);
         return source;
     }
 
@@ -171,27 +214,88 @@ public class Tuner.DirectoryController : Object {
 
 }
 
-public class Tuner.StationSource : Object {
+public abstract class Tuner.StationSource : Object {
+    protected abstract bool more  { get; protected set; }
+    protected abstract Model.StationStore store  { get; protected set; }
+
+    private StationSource (){
+        Object();
+        this.more = false;
+    } 
+    
+    public bool has_more () {
+        return this.more;
+    }
+    public abstract ArrayList<Model.Station>? fresh () ;
+
+    public abstract ArrayList<Model.Station>? next () throws SourceError;
+
+}
+public class Tuner.FavoritesSource : StationSource {
+
+    public override bool more { get; protected set; }
+    protected override Model.StationStore store  { get; protected set; }
+
+    public FavoritesSource (Model.StationStore favstore){
+        Object ();
+        store = favstore;
+        more = false;
+    }
+
+    public override ArrayList<Model.Station>? fresh () {
+        try {
+            store.load();
+            var r =  this.store.get_all (); 
+            return r;  
+        } catch (SourceError e) {
+           return null;
+        }
+    }
+
+    public override ArrayList<Model.Station>? next () throws SourceError{
+        try {
+            //store.load();
+            return this.store.get_all ();   
+        } catch (SourceError e) {
+            throw new SourceError.UNAVAILABLE("Directory Error");
+            //return null;
+        }
+    }
+}
+
+public class Tuner.RadioSource : StationSource {
+
+    protected override bool more  { get; protected set; }
+    protected override Model.StationStore store  { get; protected set; }
+
     private uint _offset = 0;
     private uint _page_size = 20;
-    private bool _more = true;
     private RadioBrowser.SearchParams _params;
     private RadioBrowser.Client _client;
-    private Model.StationStore _store;
 
-    public StationSource (uint limit, 
+    public RadioSource (uint limit, 
                           RadioBrowser.SearchParams params, 
                           RadioBrowser.Client client,
-                          Model.StationStore store) {
+                          Model.StationStore favstore) {
         Object ();
         // This disables paging for now
         _page_size = limit;
         _params = params;
         _client = client;
-        _store = store;
+        store = favstore;
+        more = true;
     }
 
-    public ArrayList<Model.Station>? next () throws SourceError {
+    public override ArrayList<Model.Station>? fresh () {
+        try {
+            return next ();
+        } catch (SourceError e) {
+            return null;
+        }
+    }
+
+    public override ArrayList<Model.Station>? next () throws SourceError {
+
         // Fetch one more to determine if source has more items than page size 
         try {
             var raw_stations = _client.search (_params, _page_size + 1, _offset);
@@ -201,23 +305,18 @@ public class Tuner.StationSource : Object {
 
             var stations = convert_stations (filtered_stations);
             _offset += _page_size;
-            _more = stations.size > _page_size;
-            if (_more) stations.remove_at( (int)_page_size);
+            more = stations.size > _page_size;
+            if (more) stations.remove_at( (int)_page_size);
             return stations;    
         } catch (RadioBrowser.DataError e) {
             throw new SourceError.UNAVAILABLE("Directory Error");
         }
     }
 
-    public bool has_more () {
-        return _more;
-    }
-
     private ArrayList<Model.Station> convert_stations (Iterator<RadioBrowser.Station> raw_stations) {
         var stations = new ArrayList<Model.Station> ();
         
         while (raw_stations.next()) {
-        // foreach (var station in raw_stations) {
             var station = raw_stations.get ();
             var s = new Model.Station (
                 station.stationuuid,
@@ -227,22 +326,17 @@ public class Tuner.StationSource : Object {
             if (_store.contains (s)) {
                 s.starred = true;
             }
+            else{
+               s.starred = false;
+            }
             s.favicon_url = station.favicon;
             s.clickcount = station.clickcount;
             s.homepage = station.homepage;
             s.codec = station.codec;
             s.bitrate = station.bitrate;
 
-            s.notify["starred"].connect ( (sender, property) => {
-                if (s.starred) {
-                    _store.add (s);
-                } else {
-                    _store.remove (s);
-                }
-            });
             stations.add (s);
         }
         return stations;
-}
-
+    }
 }

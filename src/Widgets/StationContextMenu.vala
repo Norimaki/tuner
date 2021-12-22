@@ -20,17 +20,37 @@
 
 public class Tuner.StationContextMenu : Gtk.Menu {
     public Model.Station station { get; construct; }
+    public Model.Station_View sv { get; construct; }
 
-    public StationContextMenu (Model.Station station) {
+    public StationContextMenu (Model.Station_View station_view) {
         Object (
-            station: station
+            station: station_view.instance,
+            sv: station_view
         );
     }
 
+    Gtk.MenuItem m1;
+
     construct {
+        m1 = new Gtk.MenuItem ();
+
         var label = new Gtk.MenuItem.with_label (this.station.title);
+        Gtk.Label child = (Gtk.Label) label.get_child ();
+        child.set_single_line_mode (true);
         label.sensitive = false;
         this.append (label);
+
+        //DEbug. Delete after.
+        var label_id = new Gtk.MenuItem.with_label (this.station.id);
+        label.sensitive = false;
+        this.append (label_id);
+        var label_p = new Gtk.MenuItem.with_label (
+            this.sv.icon_task.priority.major.to_string ("%d")+
+            "-"+
+            this.sv.icon_task.priority.minor.to_string ("%d")
+        );
+        label.sensitive = false;
+        this.append (label_p);
 
         var label2 = new Gtk.MenuItem.with_label (this.station.location);
         label2.sensitive = false;
@@ -44,18 +64,15 @@ public class Tuner.StationContextMenu : Gtk.Menu {
 
         this.append (new Gtk.SeparatorMenuItem ());
 
-        var m1 = new Gtk.MenuItem ();
-        set_star_context (m1);
-        m1.activate.connect (on_star_handler);
+        set_star_context ();
+        this.sv.instance.notify["starred"].connect (set_star_context);
+        m1.activate.connect (on_star_handler); //on_item_click
         this.append (m1);
-
-        this.station.notify["starred"].connect ( (sender, property) => {
-            set_star_context (m1);
-        });
     }
 
     private void on_star_handler () {
-       station.toggle_starred ();
+        this.sv.station_starred_toggled (); //signal
+        //set_star_context ();
     }
 
     private void on_website_handler () {
@@ -66,8 +83,9 @@ public class Tuner.StationContextMenu : Gtk.Menu {
         }
 
     }
-    private void set_star_context (Gtk.MenuItem item) {
-        item.label = station.starred ? Application.UNSTAR_CHAR + _("Unstar this station") : Application.STAR_CHAR + _("Star this station");
+
+    private void set_star_context () {
+        m1.label = station.starred ? Application.UNSTAR_CHAR + _("Unstar this station") : Application.STAR_CHAR + _("Star this station");
     }
 
 }
