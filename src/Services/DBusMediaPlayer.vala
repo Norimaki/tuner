@@ -190,66 +190,6 @@ namespace Tuner.DBus {
         }
     }
 
-    public class MSGxLL : GLib.Object{
-
-        private string _future;
-        public string future {
-            owned get {
-                return _future;
-            }
-            set {
-                _future = value;
-            }
-        }
-
-
-
-        [CCode (notify = false)]
-        public string other;
-
-        public MSGxLL () {
-            
-        }
-
-
-        public int cancel (uint timeout_source) {
-            Source.remove (timeout_source);
-            return 0;
-        }
-
-
-
-        public int send (string k,string str, uint timeout_source) {
-
-            
-            if (timeout_source == 0){
-                timeout_source=Timeout.add (2048, () => {
-
-                    var Notification = new GLib.Notification (k);
-                    Notification.set_body (str);
-                    var Icon = new GLib.ThemedIcon ("dialog-information");
-                    Notification.set_icon (Icon);
-                    Application.instance.send_notification (null, Notification);        
-
-                    future = str;
-                    timeout_source=0;
-                    return false;
-                });
-                return (int) timeout_source;
-            }
-            else{
-                return -1;
-            }
-
-
-           
-        }
-
-      
-    }
-
-    
-
     public class Sender : Object{
         private static HashTable<string,MutableVar> changes;
         private static DBusConnection conn;
@@ -347,8 +287,6 @@ namespace Tuner.DBus {
     public class MediaPlayerPlayer : Object, DBus.IMediaPlayer2Player {
         //[DBus (visible = false)]
         bool _c_playing;                // Control var
-        bool _c_uri_changed;             // Control var
-        bool _c_runned_autoplay;             // Control var
         bool _c_station_loaded;
 
         MutableVar z_playbackstatus;    // Used by DBus
@@ -358,9 +296,6 @@ namespace Tuner.DBus {
         Variant _metadata_notrack;      // No-track Metadata. Used by z_metadata
         Variant _metadata_track;        // Current track Metadata. Used by z_metadata
         VariantDict _h_metadata_vd;     // Helper to build a{sv}. Reusable
-
-        MutableVar z_metadata_2;          // Used by DBus
-        Variant _metadata_2;
 
         [DBus (visible = false)]
         public unowned DBusConnection conn { get; construct set; }
@@ -372,13 +307,8 @@ namespace Tuner.DBus {
             Sender.init(conn);
 
             _c_playing = false;
-            _c_uri_changed = false;
-            _c_runned_autoplay = false;
             _c_station_loaded = false;
-            MutableVar z_test = new MutableVar(
-                "Test",
-                new Variant.int32(0)
-            );
+
             z_playbackstatus = new MutableVar(
                 "PlaybackStatus", 
                 new Variant.string ("Stopped")
@@ -409,7 +339,6 @@ namespace Tuner.DBus {
 
                 switch (state) {
                 case Gst.PlayerState.PLAYING:
-                debug (@"#v7 on PLAYING");
                     _c_playing = true;
                     z_playbackstatus.set_value (new Variant.string ("Playing"));
                     break;
@@ -417,43 +346,25 @@ namespace Tuner.DBus {
                     _c_playing = true;
                     break;
                 case Gst.PlayerState.STOPPED:
-                debug (@"#v7 on STOPPED");
                     _c_playing = false;
-
-                    /* 
-                    if (send_source == 0){
-                        send_source = Timeout.add (1024, () => {
-                            
-                            return false;
-                        });
-                    }
-                    */
                     z_metadata.set_value(_metadata_notrack);
                     z_playbackstatus.set_value (new Variant.string ("Stopped"));
                     break;
                 case Gst.PlayerState.PAUSED:
-                debug (@"#v7 on PAUSED");
                     _c_playing = false;
                     z_playbackstatus.set_value (new Variant.string ("Paused"));
                     break;
                 }
-
-                //z_test.set_value (new Variant.int32(GLib.Random.int_range(0,1000000)));
-
             });
             Application.instance.player.player.uri_loaded.connect ((uri) => {
-                debug (@"#v7 ######uri_loaded");
+                //debug (@"#mpris ######uri_loaded");
             });
              Application.instance.player.uri_changed.connect ((uri) => {
-                debug (@"#v7 uri_changed");
+                //debug (@"#mpris uri_changed");
             });
-            //Application.instance.player.title_changed.connect ((title) => {
-            //    debug (@"#v7 tilte_changed");
-            //});
+
             Application.instance.player.media_info_updated.connect ((sd) => {
                 if (_c_playing && _c_station_loaded){
-                    debug (@"#v7 title_changed:_c_playing && _c_station_loaded");
-
                     _h_metadata_vd = new VariantDict(_metadata_track);
                     if (sd.title == null){
                         sd.title = "";
@@ -475,14 +386,12 @@ namespace Tuner.DBus {
             });   
           
             Application.instance.player.station_changed.connect ((station) => {
-                debug (@"#v7 station_changed $(station.title)");
 
                 _c_station_loaded = true;
                 z_playbackstatus.set_value (new Variant.string ("Playing"));
 
                 string uri = station.url;
 
-                //var url = Application.instance.player.player.uri;
                 z_can_play.set_value (new Variant.boolean (true));
                 z_can_pause.set_value (new Variant.boolean (true));
 

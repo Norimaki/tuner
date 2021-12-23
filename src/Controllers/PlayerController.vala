@@ -35,23 +35,13 @@ public class Tuner.PlayerController : Object {
     public signal void volume_changed (double volume);
     public signal void media_info_updated (streamdata sd);
     public signal void uri_changed (string uri);
-
-    public signal void ping ();
-    public bool pinged = false;
-
-    public bool autoplaying_last_station;
+   
     private uint media_info_updated_throttling_source;
-
 
     construct {
 
-        autoplaying_last_station = false;
         media_info_updated_throttling_source = 0;
 
-        ping.connect (() => {
-            debug (@"#auto PINGED ");
-            pinged = true;
-        });
         player = new Gst.Player (null, null);
         player.state_changed.connect ((state) => {
             // Don't forward flickering between playing and buffering
@@ -68,7 +58,6 @@ public class Tuner.PlayerController : Object {
                 }
                 if (sd.title != null){
                     media_info_updated_throttling_source = Timeout.add (1024, () => {
-                        debug (@"#v7 throttling end ");
                         media_info_updated_throttling_source = 0;
                         return false;
                     }); 
@@ -140,8 +129,6 @@ public class Tuner.PlayerController : Object {
     private streamdata extract_metadata_from_stream (Gst.PlayerMediaInfo media_info) {
 
         streamdata sd = { null, null, null };
-        debug (@"#v7 extractinbg data");
-
         string? title = null;
         string? genre = null;
         int? max_bitrate = null;
@@ -158,31 +145,25 @@ public class Tuner.PlayerController : Object {
                 if (tag == "title") {
                     list.get_string(tag, out title);
                     if (title != null && (sd.title == null || sd.title == "")){
-                        debug (@"#v7 title=$(title)");
                         sd.title = title;
                     }
                 }
                 else if (tag == "genre"){
                    list.get_string(tag, out genre);
-                    debug (@"#v7 genre=$(genre)");
-
                     if (genre != null && (sd.genre == null || sd.genre == "")){
                         sd.genre = genre;
                     }
                 }
                 else{
-                    //debug (@"#v7 tags=$(tag)");
-
+                    //debug (@"#mpris tags=$(tag)");
                 }
             });
         }
-
 
         if (sd.genre != null && (sd.genre == "null" || sd.genre == "(null)")){
             sd.genre = null;
         }
 
-        // Link the math library??
         if (sd.min_max_bitrate != null){
             int resto = sd.min_max_bitrate % 1000;
             if (resto<500){
@@ -194,10 +175,4 @@ public class Tuner.PlayerController : Object {
         }
         return sd;
     }
-
-    private string? extract_title_from_stream (Gst.PlayerMediaInfo media_info) {
-        var sd = extract_metadata_from_stream(media_info);
-        return sd.title;
-    }
-
 }
