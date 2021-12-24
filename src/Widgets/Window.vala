@@ -526,7 +526,7 @@ public class Tuner.Window : Gtk.ApplicationWindow {
             Application.instance.send_notification("continue-playing", notification);
             return true;
         }
-
+        IconTaskLoader.stop();
         return false;
     }
 

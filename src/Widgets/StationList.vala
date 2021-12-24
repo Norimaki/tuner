@@ -27,12 +27,16 @@ public class Tuner.StationList : AbstractContentList {
     public signal void favourites_changed ();
 
     public Model.Station selected_station;
-    
+
+    private GenericArray<IconTask> icon_tasks;
+
     public ArrayList<Model.Station> stations {
         set construct {
             clear ();
             if (value == null) return;
             
+            icon_tasks = new GenericArray<IconTask> ();
+
             foreach (var s in value) {
                 s.notify["starred"].connect ( () => {
                     favourites_changed ();
@@ -42,9 +46,11 @@ public class Tuner.StationList : AbstractContentList {
                     selection_changed (box.station);
                     selected_station = box.station;
                 });
+                icon_tasks.add (box.icon_task);
                 add (box);
             }
             item_count = value.size;
+            IconTaskLoader.bulk_add(icon_tasks);
         }
     }
 

@@ -12,6 +12,8 @@ sources = files (
     'Services/DBusInterface.vala',
     'Services/RadioBrowserDirectory.vala',
     'Services/LocationDiscovery.vala',
+    'Services/IconTask.vala',
+    'Services/IconTaskLoader.vala',
 
     'Widgets/AbstractContentList.vala',
     'Widgets/ContentBox.vala',
