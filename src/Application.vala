@@ -68,6 +68,9 @@ public class Tuner.Application : Gtk.Application {
         ensure_dir (lock_tmp_dir);
 
         add_action_entries(ACTION_ENTRIES, this);
+
+        IconTask.init(cache_dir, lock_tmp_dir);
+        IconTaskLoader.run();
     }
 
     public static Application _instance = null;
@@ -86,6 +89,7 @@ public class Tuner.Application : Gtk.Application {
             window = new Window (this, player);
             add_window (window);
             DBus.initialize ();
+
         } else {
             window.present ();
         }
