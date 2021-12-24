@@ -7,7 +7,7 @@ sources = files (
     'Models/Genre.vala',
     'Models/Station.vala',
     'Models/StationStore.vala',
-
+    'Models/Station_Source.vala',
     'Services/DBusMediaPlayer.vala',
     'Services/DBusInterface.vala',
     'Services/RadioBrowserDirectory.vala',

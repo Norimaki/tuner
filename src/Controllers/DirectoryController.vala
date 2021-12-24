@@ -114,6 +114,16 @@ public class Tuner.DirectoryController : Object {
         return source;
     }
 
+    public static ArrayList<Model.Station> get_source_s (ArrayList<Model.Station> stations){
+        var x_stations = new ArrayList<Model.Station>();
+        foreach (Model.Station station in stations) {
+            var ss = Tuner.Model.Station_Source.get_source(station);
+            station = ss.station;
+            x_stations.add(station);
+        }  
+        return x_stations;
+    }
+
     public ArrayList<Model.Station> get_stored () {
         return _store.get_all ();
     }

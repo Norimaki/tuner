@@ -63,7 +63,7 @@ public class Tuner.StationList : AbstractContentList {
 
     public StationList.with_stations (Gee.ArrayList<Model.Station> stations) {
         this ();
-        this.stations = stations;
+        this.stations = Tuner.DirectoryController.get_source_s (stations);
     }
 
     
