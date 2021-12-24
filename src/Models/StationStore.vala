@@ -91,8 +91,8 @@ public class StationStore : Object {
                     this.remove (station);
                 }
             });
-    
-            _add (station);
+            var ss = Tuner.Model.Station_Source.get_source (station);
+            _add (ss.station);
         });
 
         debug (@"loaded store size: $(_store.size)");
