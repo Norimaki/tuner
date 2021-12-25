@@ -20,11 +20,77 @@
 
 using Gee;
 
+public class Tuner.Winman : Object {
+
+    public static Winman _instance = null;
+
+    private int content_width;
+
+    public int target_cols {get; private set;}
+    public bool win_maximized {get; private set;}
+
+    public signal void target_cols_up(int target_cols);
+    public signal void win_is_maximized(bool status);
+
+    public static Winman instance {
+        get {
+            if (_instance == null) {
+                _instance = new Winman ();
+            }
+            return _instance;
+        }
+    }
+
+    public static int calc_cols(int w){
+        int c = (int)(w * 100000 / 250.00);
+        int resto = c % 100000;
+        int b = 0;
+        if (resto >= 50000){
+        b=100000;
+        }
+        int cols = (c + b - resto)/100000;
+        if (cols < 1 ) cols = 1;
+        return cols;
+    }
+
+    public void set_maximized(bool status){
+        win_maximized = status;
+        win_is_maximized(win_maximized);
+    }
+
+    public void get_flow_width(Gtk.Container c){
+        content_width = c.get_allocated_width ();
+        set_cols_from (content_width);
+    }
+
+    public void set_cols_from(int w){
+        int c = calc_cols(w);
+        if (c != target_cols){
+            target_cols = c;
+            target_cols_up(target_cols);
+        }
+    }
+
+    private Winman (){
+        
+    }
+
+    construct{
+        target_cols = 1;
+    }
+}
+
 public class Tuner.Window : Gtk.ApplicationWindow {
 
     public GLib.Settings settings { get; construct; }
     public Gtk.Stack stack { get; set; }
     public PlayerController player { get; construct; }
+    private Gtk.Paned primary_box;
+    private Gtk.Box e_box;
+    private Gtk.Stack e_stack;
+
+    private uint set_cols_source = 0;
+    private uint set_cols_source_timeout = 0;
 
     private DirectoryController _directory;
     private HeaderBar headerbar;
@@ -117,16 +183,20 @@ public class Tuner.Window : Gtk.ApplicationWindow {
         delete_event.connect (e => {
             return before_destroy ();
         });
-
-        var stack = new Gtk.Stack ();
-        stack.transition_type = Gtk.StackTransitionType.CROSSFADE;
         
         var data_file = Path.build_filename (Application.instance.data_dir, "favorites.json");
         var store = new Model.StationStore (data_file);
         _directory = new DirectoryController (store);
 
-        var primary_box = new Gtk.Paned (Gtk.Orientation.HORIZONTAL);
-
+        primary_box = new Gtk.Paned (Gtk.Orientation.HORIZONTAL);
+        stack = new Gtk.Stack ();
+        stack.transition_type = Gtk.StackTransitionType.CROSSFADE;
+        e_box = new Gtk.Box (Gtk.Orientation.HORIZONTAL,0);
+        e_stack = new Gtk.Stack ();
+        e_stack.set_size_request (200, -1);
+        e_stack.set_hexpand (true);
+        e_stack.add_named (e_box, "e_box");
+        e_stack.add_named (stack, "content_stack");
 
         var selections_category = new Granite.Widgets.SourceList.ExpandableItem (_("Selections"));
         selections_category.collapsible = false;
@@ -352,7 +422,19 @@ public class Tuner.Window : Gtk.ApplicationWindow {
         });
 
         primary_box.pack1 (source_list, false, false);
-        primary_box.pack2 (stack, true, false);
+        primary_box.pack2 (e_stack, true, false);
+
+        e_box.map.connect_after(()=>{
+            Tuner.Winman.instance.get_flow_width(e_box);
+        });
+        e_stack.map.connect_after(()=>{
+            Tuner.Winman.instance.get_flow_width(e_stack);
+            this.size_allocate.connect (on_window_resize);            
+        });
+        primary_box.map.connect_after(()=>{
+            e_stack.set_visible_child_name ("content_stack");
+        });
+
         add (primary_box);
         show_all ();
 
@@ -419,6 +501,32 @@ public class Tuner.Window : Gtk.ApplicationWindow {
         } else {
             gtk_settings.gtk_application_prefer_dark_theme = (granite_settings.prefers_color_scheme == Granite.Settings.ColorScheme.DARK);
         }
+    }
+
+    private void on_window_resize(){
+        if (set_cols_source != 0){
+            Source.remove(set_cols_source);
+        }
+        else{
+            set_cols_source_timeout = Timeout.add (1024, () => {
+                Tuner.Winman.instance.get_flow_width(e_stack);
+                set_cols_source_timeout = 0;
+                if (set_cols_source != 0){
+                    Source.remove(set_cols_source);
+                    set_cols_source = 0;
+                }
+                return false;
+            });
+        }
+        set_cols_source = Timeout.add (128, () => {
+            Tuner.Winman.instance.get_flow_width(e_stack);
+            set_cols_source = 0;
+            if (set_cols_source_timeout != 0){
+                Source.remove(set_cols_source_timeout);
+                set_cols_source_timeout = 0;
+                }
+            return false;
+        });
     }
 
     private void on_action_quit () {

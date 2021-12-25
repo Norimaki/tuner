@@ -76,6 +76,7 @@
     construct {
         // Title label
         button_title = new Gtk.Label (null);
+        button_title.set_single_line_mode (true);
         button_title.get_style_context ().add_class (Granite.STYLE_CLASS_H3_LABEL);
         button_title.halign = Gtk.Align.START;
         button_title.valign = Gtk.Align.END;
