@@ -29,7 +29,7 @@ sources = files (
     'Widgets/StationList.vala',
     'Widgets/RevealLabel.vala',
     'Widgets/PreferencesPopover.vala',
-
+    'Widgets/DebugNot.vala',
     'Application.vala',
     'Main.vala'
 )
