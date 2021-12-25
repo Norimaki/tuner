@@ -65,6 +65,11 @@ public class Tuner.StationList : AbstractContentList {
             valign: Gtk.Align.START,
             selection_mode: Gtk.SelectionMode.NONE
         );
+
+
+        map.connect (() => {
+            IconTaskLoader.sort(icon_tasks);
+        });        
     }
 
     public StationList.with_stations (Gee.ArrayList<Model.Station> stations) {
