@@ -48,17 +48,25 @@ public class Tuner.StationList : AbstractContentList {
         }
     }
 
+    void update_target_cols_handler (int target_cols) {
+        min_children_per_line = target_cols-1;
+        max_children_per_line = target_cols;
+    }
+
     public StationList () {
+        int target_cols = Tuner.Winman.instance.target_cols;
         Object (
-            homogeneous: false,
-            min_children_per_line: 1,
-            max_children_per_line: 3,
+            homogeneous: true,
+            min_children_per_line: target_cols-1,
+            max_children_per_line: target_cols,
             column_spacing: 5,
             row_spacing: 5,
             border_width: 20,
             valign: Gtk.Align.START,
             selection_mode: Gtk.SelectionMode.NONE
         );
+        set_size_request(200,-1);
+        Tuner.Winman.instance.target_cols_up.connect_after (update_target_cols_handler);
     }
 
     public StationList.with_stations (Gee.ArrayList<Model.Station> stations) {
