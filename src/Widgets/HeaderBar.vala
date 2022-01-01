@@ -44,6 +44,8 @@ public class Tuner.HeaderBar : Gtk.HeaderBar {
     public signal void searched_for (string text);
     public signal void search_focused ();
 
+    private uint search_source = 0;
+
     construct {
         show_close_button = true;
 
@@ -78,9 +80,25 @@ public class Tuner.HeaderBar : Gtk.HeaderBar {
         var searchentry = new Gtk.SearchEntry ();
         searchentry.valign = Gtk.Align.CENTER;
         searchentry.placeholder_text = _("Station name");
-        searchentry.search_changed.connect (() => {
-            searched_for (searchentry.text);
+        searchentry.search_changed.connect ((e) => {
+            if (search_source != 0){
+                Source.remove(search_source);
+            }
+            search_source = Timeout.add (1024, () => {
+                searched_for (e.text);
+                search_source = 0;
+                return false;
+            });        
         });
+
+        searchentry.activate.connect ((e) => {
+            if (search_source != 0){
+                Source.remove(search_source);
+            }
+            searched_for (e.text);
+            search_source = 0;
+        });
+
         searchentry.focus_in_event.connect ((e) => {
             search_focused ();
             return true;

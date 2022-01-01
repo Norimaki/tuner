@@ -398,6 +398,8 @@ public class Tuner.Window : Gtk.ApplicationWindow {
         });
 
         headerbar.searched_for.connect ( (text) => {
+            if (text._strip().length == 0) return;
+
             if (text.length > 0) {
                 string mytext = text;
                 var s5 = _directory.load_search_stations (mytext, 100); 
